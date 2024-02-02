@@ -45,7 +45,7 @@
 
 (library
  (name liba)
- (modules Language Pprinter stdpath version X86 SM)
+ (modules Language Pprinter stdpath version X86 SM Typing)
  (libraries GT ostap)
  (flags
   (:standard
@@ -64,6 +64,7 @@
      (run %{project_root}/src/pp5+gt+plugins+ostap+dump.byte %{input-file}))
     Language
     Pprinter
+    Typing
     stdpath
     version)))
  (preprocessor_deps

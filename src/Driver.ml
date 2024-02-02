@@ -31,7 +31,7 @@ class options args =
     val infile = ref (None : string option)
     val outfile = ref (None : string option)
     val paths = ref [ X86.get_std_path () ]
-    val mode = ref (`Default : [ `Default | `Eval | `SM | `Compile | `BC ])
+    val mode = ref (`Default : [ `Default | `Eval | `SM | `Compile | `BC | `TC ])
     val curdir = Unix.getcwd ()
     val debug = ref false
 
@@ -64,6 +64,7 @@ class options args =
           | "-s" -> self#set_mode `SM
           | "-b" -> self#set_mode `BC
           | "-i" -> self#set_mode `Eval
+          | "-t" -> self#set_mode `TC
           | "-ds" -> self#set_dump dump_sm
           | "-dsrc" -> self#set_dump dump_source
           | "-dp" -> self#set_dump dump_ast
@@ -198,6 +199,9 @@ let[@ocaml.warning "-32"] main =
         match cmd#get_mode with
         | `Default | `Compile -> ignore @@ X86.build cmd prog
         | `BC -> SM.ByteCode.compile cmd (SM.compile cmd prog)
+        | `TC ->
+            let prog' = Typing.Expr.from_language @@ snd prog in
+            print_string @@ Typing.Expr.show_t prog'
         | _ ->
             let rec read acc =
               try
