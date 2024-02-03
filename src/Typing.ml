@@ -27,7 +27,11 @@ module Expr = struct
     and decl =
     | Var of string * t
     | Fun of string * string list * t
-    with show
+    with show, eval
+
+    let decl_name = function
+    | Var (x, _) -> x
+    | Fun (x, _, _) -> x
 
     module L = Language.Expr
 
@@ -63,4 +67,64 @@ module Expr = struct
     | x, (_, `Fun      (xs,  t)) -> Fun (x, xs, from_language t)
     | x, (_, `Variable  None   ) -> Var (x, Int 0)
     | x, (_, `Variable (Some t)) -> Var (x, from_language t)
+
+    (* convert all scrutinees to variables, don't erase Named patterns *)
+
+    let case_of_variable_pass ast =
+        let module M = struct
+            module SS = Set.Make(String)
+
+            let idx = Stdlib.ref 0
+
+            let rec next_var ctx =
+                let cur_idx = !idx + 1 in
+                idx := cur_idx ;
+
+                let var = Printf.sprintf "var!%d" cur_idx in
+
+                if SS.mem var ctx
+                then next_var ctx
+                else var
+
+            class pass (eval_decl, fself as _mutuals_pack) = object
+                inherit [_, _, SS.t] eval_t_t_stub _mutuals_pack
+
+                method! c_Scope ctx _ ds t =
+                    let (ds, ctx) = List.fold_left (
+                        fun (ds, ctx) d -> eval_decl ctx d :: ds, SS.add (decl_name d) ctx
+                    ) ([], ctx) ds in
+
+                    Scope (List.rev ds, fself ctx t)
+
+                method! c_Case ctx _ t bs =
+                    let var = next_var ctx in
+                    let t = fself ctx t in
+
+                    let process (p, b) =
+                        (* Printf.eprintf "pattern: %s\n" @@ GT.show Pattern.t p ; *)
+
+                        let bindings = Pattern.bindings p in
+                        let ctx = List.fold_left (fun ctx (x, _) -> SS.add x ctx) ctx bindings in
+                        let b = fself ctx b in
+
+                        let path_to_subscript =
+                            List.fold_left (fun xs i -> Subscript (xs, Int i)) (Name var)
+                        in
+
+                        let ds = List.map (fun (x, p) -> Var (x, path_to_subscript p)) bindings in
+
+                        (* Printf.eprintf "decls: %s\n" @@ GT.show list (GT.show decl) ds ; *)
+
+                        p, if ds = [] then b else Scope (ds, b)
+                    in
+
+                    let bs = List.map process bs in
+
+                    Scope ([Var (var, t)], Case (Name var, bs))
+            end
+
+            let pass = let (_, f) = fix_decl eval_decl_0 (new pass) in f SS.empty
+        end in
+
+        M.pass ast
 end

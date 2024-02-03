@@ -1324,31 +1324,7 @@ let compile cmd ((imports, _), p) =
     in
     (List.flatten (List.rev code), env)
   and bindings env p =
-    let bindings =
-      transform Pattern.t
-        (fun fself ->
-          object
-            inherit [int list, _, (string * int list) list] Pattern.t_t
-            method c_Wildcard _ _ = []
-            method c_Named path _ s p = [ (s, path) ] @ fself path p
-
-            method c_Sexp path _ _ ps =
-              List.concat @@ List.mapi (fun i p -> fself (path @ [ i ]) p) ps
-
-            method c_UnBoxed _ _ = []
-            method c_StringTag _ _ = []
-            method c_String _ _ _ = []
-            method c_SexpTag _ _ = []
-            method c_Const _ _ _ = []
-            method c_Boxed _ _ = []
-            method c_ArrayTag _ _ = []
-            method c_ClosureTag _ _ = []
-
-            method c_Array path _ ps =
-              List.concat @@ List.mapi (fun i p -> fself (path @ [ i ]) p) ps
-          end)
-        [] p
-    in
+    let bindings = Pattern.bindings p in
     let env, code =
       List.fold_left
         (fun (env, acc) (name, path) ->

@@ -201,6 +201,7 @@ let[@ocaml.warning "-32"] main =
         | `BC -> SM.ByteCode.compile cmd (SM.compile cmd prog)
         | `TC ->
             let prog' = Typing.Expr.from_language @@ snd prog in
+            let prog' = Typing.Expr.case_of_variable_pass prog' in
             print_string @@ Typing.Expr.show_t prog'
         | _ ->
             let rec read acc =

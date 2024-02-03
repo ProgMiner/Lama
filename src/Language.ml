@@ -306,7 +306,7 @@ module Pattern =
     (* any sexp value   *) | SexpTag
     (* any array value  *) | ArrayTag
     (* any closure      *) | ClosureTag
-    with show, foldl, html, fmt
+    with show, foldl, html, fmt, eval
 
     (* Pattern parser *)
     ostap (
@@ -343,6 +343,29 @@ module Pattern =
     )
 
     let vars p = transform(t) (fun f -> object inherit [string list, _] @t[foldl] f method c_Named s _ name p = name :: f s p end) [] p
+
+    let bindings = transform(t) (fun fself ->
+      object
+        inherit [int list, _, (string * int list) list] @t
+        method c_Wildcard _ _ = []
+        method c_Named path _ s p = (s, path) :: fself path p
+
+        method c_Sexp path _ _ ps =
+          List.concat @@ List.mapi (fun i p -> fself (path @ [ i ]) p) ps
+
+        method c_UnBoxed _ _ = []
+        method c_StringTag _ _ = []
+        method c_String _ _ _ = []
+        method c_SexpTag _ _ = []
+        method c_Const _ _ _ = []
+        method c_Boxed _ _ = []
+        method c_ArrayTag _ _ = []
+        method c_ClosureTag _ _ = []
+
+        method c_Array path _ ps =
+          List.concat @@ List.mapi (fun i p -> fself (path @ [ i ]) p) ps
+      end
+    ) []
 
   end
 
