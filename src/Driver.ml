@@ -200,9 +200,17 @@ let[@ocaml.warning "-32"] main =
         | `Default | `Compile -> ignore @@ X86.build cmd prog
         | `BC -> SM.ByteCode.compile cmd (SM.compile cmd prog)
         | `TC ->
-            let prog' = Typing.Expr.from_language @@ snd prog in
-            let prog' = Typing.Expr.case_of_variable_pass prog' in
-            print_string @@ Typing.Expr.show_t prog'
+            let module T = Typing in
+            let prog' = T.Expr.from_language @@ snd prog in
+            let prog' = T.Expr.case_of_variable_pass prog' in
+            print_endline @@ T.Expr.show_t prog' ;
+            let ctx = T.Type.Context.of_seq @@ List.to_seq
+                [ "read", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [], T.Type.Int)
+                ; "write", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [T.Type.Int], T.Type.Int)
+                ] in
+            let c, t = (T.Type.make_infer ())#term ctx prog' in
+            print_endline @@ T.Type.show_c c ;
+            print_endline @@ T.Type.show_t t
         | _ ->
             let rec read acc =
               try
