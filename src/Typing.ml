@@ -334,16 +334,14 @@ module Type = struct
         and infer_decl ctx = function
         | E.Var (x, v) ->
             let c, t = infer ctx v in
-            c, Context.add x t ctx
+            And (c, Eq (Context.find x ctx, t))
         | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
 
-        and infer_decls ctx =
-            let f (c, ctx) d =
-                let c', ctx = infer_decl ctx d in
-                And (c, c'), ctx
-            in
+        and infer_decls ctx ds =
+            let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
+            let ctx = List.fold_left f ctx ds in
 
-            List.fold_left f (Top, ctx)
+            List.fold_left (fun c d -> And (c, infer_decl ctx d)) Top ds, ctx
         in
 
         object

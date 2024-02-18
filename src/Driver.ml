@@ -207,6 +207,18 @@ let[@ocaml.warning "-32"] main =
             let ctx = T.Type.Context.of_seq @@ List.to_seq
                 [ "read", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [], T.Type.Int)
                 ; "write", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [T.Type.Int], T.Type.Int)
+                ; "length", T.Type.Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [0]
+                    , T.Type.Box (T.Type.Name 0)
+                    , [T.Type.Name 0]
+                    , T.Type.Int
+                    )
+                ; "string", T.Type.Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [0]
+                    , T.Type.Top
+                    , [T.Type.Name 0]
+                    , T.Type.Int
+                    )
                 ] in
             let c, t = (T.Type.make_infer ())#term ctx prog' in
             print_endline @@ T.Type.show_c c ;
