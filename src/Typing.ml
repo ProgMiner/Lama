@@ -208,6 +208,16 @@ module Type = struct
 
     let ftv_context ctx = Context.fold (fun _ t fvs -> ftv fvs t) ctx IS.empty
 
+    (* trivial simplifier *)
+    (* TODO simplify better *)
+
+    let rec simplify = function
+    | And (Top, x) -> simplify x
+    | And (x, Top) -> simplify x
+    | And (And (ll, lr), r) -> simplify @@ And (ll, And (lr, r))
+    | And (l, r) -> And (simplify l, simplify r)
+    | x -> x
+
     (* make inferrer *)
 
     let make_infer () =
@@ -286,7 +296,7 @@ module Type = struct
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
             let c, t = infer ctx' b in
-            (* TODO simplify c *)
+            let c = simplify c in
             let fvs = ftv_context ctx in
             (* TODO split c by fvs? *)
             let ts = List.map snd xts in
