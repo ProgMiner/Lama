@@ -480,6 +480,9 @@ let solve (c : TT.c) : TT.t Subst.t =
 
     let res = run q make_goal (fun x -> x#reify @@ List.prj_exn reify_lama_t) in
 
+    (*
+    (* too slow *)
+    (* TODO fix relations and remove set *)
     let module Ans = struct
 
         type t = ground_lama_t list
@@ -498,6 +501,9 @@ let solve (c : TT.c) : TT.t Subst.t =
     ) AS.empty res in
 
     let ans = AS.elements ans in
+    *)
+
+    let ans = Stream.take ~n:1 @@ Stream.map (List.to_list logic_lama_t_to_ground) res in
 
     let ans = match ans with
     | [] -> failwith "no one solution found"
