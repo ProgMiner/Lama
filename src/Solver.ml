@@ -213,6 +213,7 @@ and logic_lama_c_to_ground : logic_lama_c -> ground_lama_c = function
     logic_lama_t_to_ground
     x
 
+(* xs[i] = x *)
 let rec list_index (i : Nat.injected) (xs : 'a List.injected) (x : 'a) = ocanren
     { fresh x', xs' in xs == List.cons x' xs'
     & { i == Nat.o & x == x'
@@ -220,6 +221,7 @@ let rec list_index (i : Nat.injected) (xs : 'a List.injected) (x : 'a) = ocanren
       }
     }
 
+(* res <=> exists i. xs[i] = x *)
 let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) =
     let nil = List.nil () in ocanren
     { xs == nil & res == false
@@ -230,40 +232,41 @@ let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) =
     }
 
 let ind_sexp_hlp xs (t : injected_lama_t) : goal =
-    let f' (t' : injected_lama_t) res : goal = ocanren { t == t' & res == true } in
+    let f' (t' : injected_lama_t) res : goal = ocanren
+        { t == t' & res == true
+        | t =/= t' & res == false
+        } in
 
     let f xts res : goal = ocanren {
         fresh x, ts, ts' in xts == (x, ts)
         & List.mapo f' ts ts'
-        & List.allo ts' true
-        & res == true
+        & List.allo ts' res
     } in
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
 
 let ind_i_sexp_hlp (i : Nat.injected) xs (t : injected_lama_t) : goal =
     let f xts res : goal = ocanren {
-        fresh x, ts, t' in xts == (x, ts)
-        & list_index i ts t'
-        & t == t'
-        & res == true
+        fresh x, ts, t' in xts == (x, ts) & list_index i ts t'
+            & { t == t' & res == true | t =/= t' & res == false }
     } in
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
 
 let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goal =
     let f xts res : goal = ocanren {
-        fresh x', ts' in xts == (x, ts')
-        & x == x'
-        & ts == ts'
-        & res == true
+        fresh x', ts' in xts == (x, ts') &
+        { x == x' & ts == ts' & res == true
+        | x =/= x' & res == false
+        | ts =/= ts' & res == false
+        }
     } in
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.anyo xs' true }
 
 let rec subst_t x s t t' = ocanren
     { t == TName x & t' == s
-    | { fresh y in t == TName y & y =/= x & t' == t }
+    | { fresh y in y =/= x & t == TName y & t' == t }
     | t == TInt & t' == TInt
     | t == TString & t' == TString
     | { fresh fxs, fc, fts, ft, has_var in t == TArrow fxs fc fts ft
@@ -279,20 +282,20 @@ let rec subst_t x s t t' = ocanren
 
 and subst_c x s c c' = ocanren
     { c == CTop & c' == CTop
-    | { fresh c1, c2, c1', c2' in c == CAnd c1 c2
+    | { fresh c1, c2, c1', c2' in c == CAnd (c1, c2)
         & subst_c x s c1 c1' & subst_c x s c2 c2'
-        & c' == CAnd c1' c2' }
-    | { fresh t1, t2, t1', t2' in c == CEq t1 t2
+        & c' == CAnd (c1', c2') }
+    | { fresh t1, t2, t1', t2' in c == CEq (t1, t2)
         & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CEq t1' t2' }
+        & c' == CEq (t1', t2') }
     | { fresh t, t' in c == CBox t & subst_t x s t t' & c' == CBox t' }
     | { fresh t, t' in c == CFun t & subst_t x s t t' & c' == CFun t' }
-    | { fresh t1, t2, t1', t2' in c == CInd t1 t2
+    | { fresh t1, t2, t1', t2' in c == CInd (t1, t2)
         & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CInd t1' t2' }
-    | { fresh i, t1, t2, t1', t2' in c == CIndI i t1 t2
+        & c' == CInd (t1', t2') }
+    | { fresh i, t1, t2, t1', t2' in c == CIndI (i, t1, t2)
         & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CIndI i t1' t2' }
+        & c' == CIndI (i, t1', t2') }
     | { fresh t, t' in c == CSexp t & subst_t x s t t' & c' == CSexp t' }
     | { fresh x', t, ts, t', ts' in c == CSexpX (x', t, ts)
         & subst_t x s t t' & List.mapo (subst_t x s) ts ts'
