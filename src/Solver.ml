@@ -286,13 +286,20 @@ and subst_c x s c c' = ocanren
         & subst_t x s t1 t1' & subst_t x s t2 t2'
         & c' == CEq t1' t2' }
     | { fresh t, t' in c == CBox t & subst_t x s t t' & c' == CBox t' }
-    | { fresh t, t' in c == CFun t & subst_t x s t t' & c' == CBox t' }
+    | { fresh t, t' in c == CFun t & subst_t x s t t' & c' == CFun t' }
     | { fresh t1, t2, t1', t2' in c == CInd t1 t2
         & subst_t x s t1 t1' & subst_t x s t2 t2'
         & c' == CInd t1' t2' }
     | { fresh i, t1, t2, t1', t2' in c == CIndI i t1 t2
         & subst_t x s t1 t1' & subst_t x s t2 t2'
         & c' == CIndI i t1' t2' }
+    | { fresh t, t' in c == CSexp t & subst_t x s t t' & c' == CSexp t' }
+    | { fresh x', t, ts, t', ts' in c == CSexpX (x', t, ts)
+        & subst_t x s t t' & List.mapo (subst_t x s) ts ts'
+        & c' == CSexpX (x', t', ts') }
+    | { fresh f, ts, t, f', ts', t' in c == CCall (f, ts, t)
+        & subst_t x s f f' & List.mapo (subst_t x s) ts ts' & subst_t x s t t'
+        & c' == CCall (f', ts', t')}
     }
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
@@ -483,7 +490,11 @@ let solve (c : TT.c) : TT.t Subst.t =
 
     let module AS = Set.Make(Ans) in
     let ans = Stream.fold (fun ans res ->
-        AS.add (List.to_list logic_lama_t_to_ground res) ans
+        let ans = AS.add (List.to_list logic_lama_t_to_ground res) ans in
+
+        if AS.cardinal ans > 1
+        then failwith "more than one solution found"
+        else ans
     ) AS.empty res in
 
     let ans = AS.elements ans in
@@ -491,7 +502,7 @@ let solve (c : TT.c) : TT.t Subst.t =
     let ans = match ans with
     | [] -> failwith "no one solution found"
     | [ans] -> ans
-    | _ -> failwith "more than one solution found"
+    | _ -> failwith "not reachable"
     in
 
     print_endline @@ "Answer: " ^ GT.show GT.list (GT.show ground_lama_t) ans ;
