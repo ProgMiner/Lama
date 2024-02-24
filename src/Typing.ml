@@ -208,6 +208,31 @@ module Type = struct
 
     let ftv_context ctx = Context.fold (fun _ t fvs -> ftv fvs t) ctx IS.empty
 
+    (* substitution *)
+
+    let rec subst_t f bvs = function
+    | Name x as t when IS.mem x bvs -> t
+    | Name x -> f x
+    | Int -> Int
+    | String -> String
+    | Arrow (xs, c, ts, t) ->
+        let bvs = IS.union bvs xs in
+        Arrow (xs, subst_c f bvs c, List.map (subst_t f bvs) ts, subst_t f bvs t)
+    | Array t -> Array (subst_t f bvs t)
+    | Sexp xs -> Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
+
+    and subst_c f bvs = function
+    | Top -> Top
+    | And (l, r) -> And (subst_c f bvs l, subst_c f bvs r)
+    | Eq (l, r) -> Eq (subst_t f bvs l, subst_t f bvs r)
+    | Box t -> Box (subst_t f bvs t)
+    | Fun t -> Fun (subst_t f bvs t)
+    | Ind (l, r) -> Ind (subst_t f bvs l, subst_t f bvs r)
+    | IndI (i, l, r) -> IndI (i, subst_t f bvs l, subst_t f bvs r)
+    | SexpC t -> SexpC (subst_t f bvs t)
+    | SexpX (x, t, ts) -> SexpX (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
+    | Call (t, ss, s) -> Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
+
     (* trivial simplifier *)
     (* TODO simplify better *)
 

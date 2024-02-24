@@ -17,6 +17,8 @@ depends: [
   "camlp5"      { >= "8.00.05" }
   "ostap"       { >= "0.5"}
   "GT"          { >= "0.5.1" }
+  "OCanren"     {  = "0.3.0" }
+  "noCanren"    {  = "0.3.0" }
 ]
 
 build: [

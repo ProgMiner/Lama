@@ -201,9 +201,13 @@ let[@ocaml.warning "-32"] main =
         | `BC -> SM.ByteCode.compile cmd (SM.compile cmd prog)
         | `TC ->
             let module T = Typing in
+            let module S = Solver in
+
             let prog' = T.Expr.from_language @@ snd prog in
             let prog' = T.Expr.case_of_variable_pass prog' in
+
             print_endline @@ T.Expr.show_t prog' ;
+
             let ctx = T.Type.Context.of_seq @@ List.to_seq
                 [ "read", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [], T.Type.Int)
                 ; "write", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [T.Type.Int], T.Type.Int)
@@ -220,8 +224,31 @@ let[@ocaml.warning "-32"] main =
                     , T.Type.Int
                     )
                 ] in
+
             let c, t = (T.Type.make_infer ())#term ctx prog' in
             let c = T.Type.simplify c in
+
+            print_endline @@ T.Type.show_c c ;
+            print_endline @@ T.Type.show_t t ;
+
+            let subst = S.solve c in
+
+            print_endline @@ "Substitution: " ^ S.Subst.fold (fun v t acc ->
+                let t = T.Type.show_t t in
+                if acc = ""
+                then Printf.sprintf "{ tv_%d -> %s" v t
+                else Printf.sprintf "%s; tv_%d -> %s" acc v t
+            ) subst "" ^ " }";
+
+            let subst v = match S.Subst.find_opt v subst with
+            | None -> Printf.printf "variable %d wasn't solved!\n" v ; T.Type.Name v
+            | Some t -> t
+            in
+
+            let c = T.Type.subst_c subst T.Type.IS.empty c in
+            let t = T.Type.subst_t subst T.Type.IS.empty t in
+
+            print_endline "Result:" ;
             print_endline @@ T.Type.show_c c ;
             print_endline @@ T.Type.show_t t
         | _ ->

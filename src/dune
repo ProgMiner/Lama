@@ -43,10 +43,21 @@
      (run cat stdpath2.ml)
      (run tr -d '\n'))))))
 
+; (rule
+;  (targets Solver.ml)
+;  (deps
+;   (:input Solver.noc.ml)
+;   (package noCanren))
+;  (action
+;   (run
+;    sh
+;    -c
+;    "noCanren -w -8 %{input} -I `ocamlfind -query OCanren` -rectypes -o %{targets}")))
+
 (library
  (name liba)
- (modules Language Pprinter stdpath version X86 SM Typing)
- (libraries GT ostap)
+ (modules Language Pprinter stdpath version X86 SM Typing Solver Check)
+ (libraries GT ostap OCanren)
  (flags
   (:standard
    -rectypes
@@ -63,12 +74,23 @@
    ((action
      (run %{project_root}/src/pp5+gt+plugins+ostap+dump.byte %{input-file}))
     Language
-    Pprinter
     Typing
+    Pprinter
     stdpath
-    version)))
+    version)
+   ; ((pps
+   ;   OCanren-ppx.ppx_repr
+   ;   OCanren-ppx.ppx_fresh
+   ;   OCanren-ppx.ppx_distrib -new-typenames
+   ;   GT.ppx_all)
+   ;  Solver)
+   ((action
+     (run %{project_root}/src/pp5+gt+plugins+ocanren+dump.byte %{input-file}))
+    Check
+    Solver)))
  (preprocessor_deps
   (file %{project_root}/src/pp5+gt+plugins+ostap+dump.byte)
+  (file %{project_root}/src/pp5+gt+plugins+ocanren+dump.byte)
   ;(file %{project_root}/src/pp5+gt+plugins+ostap+dump.exe)
   )
  ;(inline_tests)
@@ -105,6 +127,18 @@
    mkcamlp5
    -package
    camlp5,camlp5.pa_o,camlp5.pr_o,ostap.syntax,GT.syntax.all,GT.syntax
+   -o
+   %{targets})))
+
+(rule
+ (targets pp5+gt+plugins+ocanren+dump.byte)
+ (deps
+  (package GT))
+ (action
+  (run
+   mkcamlp5
+   -package
+   camlp5,camlp5.pa_o,camlp5.pr_o,GT.syntax.all,GT.syntax,OCanren.syntax
    -o
    %{targets})))
 
