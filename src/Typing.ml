@@ -234,15 +234,94 @@ module Type = struct
     | SexpX (x, t, ts) -> SexpX (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
     | Call (t, ss, s) -> Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
 
+    (* list of constraints without And and Top *)
+
+    let list_c =
+        let rec list_c acc = function
+        | Top -> acc
+        | And (l, r) -> list_c (list_c acc l) r
+        | c -> c :: acc
+        in list_c []
+
+    (* constraint built from list *)
+
+    let c_list = function
+    | [] -> Top
+    (* NB: rope-like structure with "lightweight" left branch, important for solver *)
+    | c :: cs -> List.fold_left (fun acc c -> And (c, acc)) c cs
+
     (* trivial simplifier *)
     (* TODO simplify better *)
 
-    let rec simplify = function
-    | And (Top, x) -> simplify x
-    | And (x, Top) -> simplify x
-    | And (And (ll, lr), r) -> simplify @@ And (ll, And (lr, r))
-    | And (l, r) -> And (simplify l, simplify r)
-    | x -> x
+    let simplify c = c_list @@ list_c c
+
+    (* split constraint by given bound and free type variables *)
+
+    (* Explanation: constraint is a undirected graph with types as nodes and primitive constraints
+     *              as edges, so we could split it on two sides: free and bound.
+     *
+     *              Bound part includes all bound variables and all reachable variables.
+     *              Free part is all non-reachable variables.
+     *
+     *              Free variables argument is used as filter, they are not part of graph.
+     *
+     *              As a result, we could determine set of bound variables, bound constraints and
+     *              free constraints.
+     *)
+
+    let split_c bvs fvs c =
+        let bvs = IS.diff bvs fvs in
+        let c = List.map (fun c -> c, IS.diff (ftv_c IS.empty c) fvs) @@ list_c c in
+
+        Printf.printf "Source bound variables: %s\n"
+            @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq bvs ;
+
+        let module Edges = Map.Make(Int) in
+        let edges = Stdlib.ref Edges.empty in
+
+        let add_edges tvs tv =
+            let cur_edges = !edges in
+            let cur = Edges.find_opt tv cur_edges in
+            let cur = Option.value cur ~default:IS.empty in
+            edges := Edges.add tv (IS.union cur tvs) cur_edges
+        in
+
+        (* build graph *)
+        List.iter (fun tvs -> IS.iter (add_edges tvs) tvs)
+            @@ List.map snd c ;
+
+        let visited = Stdlib.ref IS.empty in
+
+        let rec dfs tv =
+            let cur_visited = !visited in
+            if IS.mem tv cur_visited
+            then ()
+            else (
+                visited := IS.add tv cur_visited ;
+                IS.iter dfs @@ Option.value (Edges.find_opt tv !edges) ~default:IS.empty ;
+            )
+        in
+
+        (* mark reachable from bound *)
+        IS.iter dfs bvs ;
+
+        (* here is bound part of tvs *)
+        let bvs = !visited in
+
+        (* bvs is transitive closure, so check any tv is enough *)
+        let pred (_, fvs) = match IS.choose_opt fvs with
+        | None -> false
+        | Some fv -> IS.mem fv bvs
+        in
+
+        let (bc, fc) = List.partition pred c in
+        let bc = c_list @@ List.map fst bc in
+        let fc = c_list @@ List.map fst fc in
+
+        Printf.printf "Result bound variables: %s\n"
+            @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq bvs ;
+
+        bvs, bc, fc
 
     (* make inferrer *)
 
@@ -324,12 +403,19 @@ module Type = struct
             let c, t = infer ctx' b in
             let c = simplify c in
             let fvs = ftv_context ctx in
-            (* TODO split c by fvs? *)
             let ts = List.map snd xts in
+
+            (*
+            (* naive approach *)
             let all_tvs = ftv IS.empty t in
             let all_tvs = ftv_c all_tvs c in
             let all_tvs = List.fold_left ftv all_tvs ts in
             Top, Arrow (IS.diff all_tvs fvs, c, ts, t)
+            *)
+
+            let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+            let (bvs, bc, fc) = split_c signature_tvs fvs c in
+            fc, Arrow (bvs, bc, ts, t)
         | E.Skip -> Top, new_tv ()
         | E.Array xs ->
             let css = List.map (infer ctx) xs in
