@@ -187,14 +187,15 @@ module Type = struct
     | Name x -> IS.add x fvs
     | Int -> fvs
     | String -> fvs
-    | Arrow (xs, _, ts, t) ->
+    | Arrow (xs, c, ts, t) ->
         let fvs = List.fold_left ftv fvs ts in
         let fvs = ftv fvs t in
+        let fvs = ftv_c fvs c in
         IS.diff fvs xs
     | Array t -> ftv fvs t
     | Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
 
-    let rec ftv_c fvs = function
+    and ftv_c fvs = function
     | Top -> fvs
     | And (l, r) -> ftv_c (ftv_c fvs l) r
     | Eq (l, r) -> ftv (ftv fvs l) r

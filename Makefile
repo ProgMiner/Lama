@@ -27,7 +27,7 @@ uninstall:
 regression-all: regression regression-expressions
 
 regression:
-	$(MAKE) clean check -C regression
+	$(MAKE) clean check -j8 -C regression
 	$(MAKE) clean check -j8 -C stdlib/regression
 
 regression-expressions:
