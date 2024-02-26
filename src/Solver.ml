@@ -311,7 +311,7 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
     | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c1 & c //- c2 } (* C-And *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c1 //- c' } (* C-AndL *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c2 //- c' } (* C-AndR *)
-    | { fresh t1, t2 in c' == CEq (t1, t2) & t1 == t2 }
+    (* | { fresh t1, t2 in c' == CEq (t1, t2) & t1 == t2 } *)
     | { fresh t, s in c' == CBox t & c //- CInd (t, s) } (* C-BoxInd *)
     | { fresh t in c' == CBox t & c //- CSexp t } (* C-BoxSexp *)
     | { fresh t in c' == CBox t & c //- CFun t } (* C-BoxFun *)

@@ -134,6 +134,7 @@ module Type = struct
 
     module IS = Set.Make(Int)
     module Context = Map.Make(String)
+    module Subst = Map.Make(Int)
 
     type t =
     | Name      of int              (* type variable name *)
@@ -234,6 +235,8 @@ module Type = struct
     | SexpX (x, t, ts) -> SexpX (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
     | Call (t, ss, s) -> Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
 
+    let subst_map_to_fun s x = Option.value (Subst.find_opt x s) ~default:(Name x)
+
     (* list of constraints without And and Top *)
 
     let list_c =
@@ -250,14 +253,54 @@ module Type = struct
     (* NB: rope-like structure with "lightweight" left branch, important for solver *)
     | c :: cs -> List.fold_left (fun acc c -> And (c, acc)) c cs
 
+    (* solve syntax equality constraints using Robinson's alogrithm *)
+
+    let unify =
+        let rec u = function
+        | (Name x, Name y) ->
+            if x == y
+            then Subst.empty
+            else if x < y
+                then Subst.singleton y @@ Name x
+                else Subst.singleton x @@ Name y
+        | (Name x, t) ->
+            if IS.mem x @@ ftv IS.empty t
+            then failwith "recursive equation" (* TODO *)
+            else Subst.singleton x t
+        | (t, (Name _ as t')) -> u (t', t)
+        | (Int, Int) -> Subst.empty
+        | (String, String) -> Subst.empty
+        | (Arrow _, Arrow _) -> failwith "arrows equality occurred" (* TODO *)
+        | (Array t1, Array t2) -> u (t1, t2)
+        | (Sexp _, Sexp _) -> failwith "sexp equality occurred" (* TODO *)
+        | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
+        in
+
+        let f (s, res) = function
+        | Top -> failwith "ill-formed constraint list (Top)"
+        | And _ -> failwith "ill-formed constraint list (And)"
+        | Eq (l, r) ->
+            let sf = subst_map_to_fun s in
+            let l = subst_t sf IS.empty l in
+            let r = subst_t sf IS.empty r in
+
+            let s' = u (l, r) in
+
+            let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
+            Subst.union (fun _ -> failwith "duplicated variables in substitution") s s', res
+        | c -> s, subst_c (subst_map_to_fun s) IS.empty c :: res
+        in
+
+        fun c -> snd @@ List.fold_left f (Subst.empty, []) c
+
     (* trivial simplifier *)
     (* TODO simplify better *)
 
-    let simplify c = c_list @@ list_c c
+    let simplify c = c_list @@ unify @@ list_c c
 
     (* split constraint by given bound and free type variables *)
 
-    (* Explanation: constraint is a undirected graph with types as nodes and primitive constraints
+    (* Explanation: constraint is an undirected graph with types as nodes and primitive constraints
      *              as edges, so we could split it on two sides: free and bound.
      *
      *              Bound part includes all bound variables and all reachable variables.
