@@ -226,8 +226,14 @@ let[@ocaml.warning "-32"] main =
                 ] in
 
             let c, t = (T.Type.make_infer ())#term ctx prog' in
-            let c = T.Type.simplify c in
 
+            print_endline @@ T.Type.show_c c ;
+            print_endline @@ T.Type.show_t t ;
+
+            let c, s = T.Type.simplify c in
+            let t = T.Type.subst_t (T.Type.subst_map_to_fun s) T.Type.IS.empty t in
+
+            print_endline "After simplify:" ;
             print_endline @@ T.Type.show_c c ;
             print_endline @@ T.Type.show_t t ;
 

@@ -14,7 +14,7 @@ $(TESTS): %: %.lama
 	@cat $@.input | LAMA=../runtime $(LAMAC) -i $< > $@.log && diff $@.log orig/$@.log
 	@cat $@.input | LAMA=../runtime $(LAMAC) -ds -s $< > $@.log && diff $@.log orig/$@.log
 	@LAMA=../runtime $(LAMAC) $< && cat $@.input | ./$@ > $@.log && diff $@.log orig/$@.log
-	-LAMA=../runtime timeout 5s $(LAMAC) -t $< >/dev/null \
+	-LAMA=../runtime timeout 5s $(LAMAC) -t $< >$@.tc.log \
 		&& printf "done\t$<\n" >> typecheck.log \
 		|| printf "fail\t$<\n" >> typecheck.log
 

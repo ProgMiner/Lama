@@ -291,12 +291,15 @@ module Type = struct
         | c -> s, subst_c (subst_map_to_fun s) IS.empty c :: res
         in
 
-        fun c -> snd @@ List.fold_left f (Subst.empty, []) c
+        fun c -> List.fold_left f (Subst.empty, []) c
 
     (* trivial simplifier *)
     (* TODO simplify better *)
 
-    let simplify c = c_list @@ unify @@ list_c c
+    let simplify c =
+        let c = list_c c in
+        let s, c = unify c in
+        c_list c, s
 
     (* split constraint by given bound and free type variables *)
 
@@ -444,9 +447,11 @@ module Type = struct
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
             let c, t = infer ctx' b in
-            let c = simplify c in
+            let c, s = simplify c in
             let fvs = ftv_context ctx in
-            let ts = List.map snd xts in
+            let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
+            let ts = List.map subst_t' @@ List.map snd xts in
+            let t = subst_t' t in
 
             (*
             (* naive approach *)
@@ -466,10 +471,10 @@ module Type = struct
             let c = List.fold_left (fun c (c', s) -> And (c, And (Eq (t, s), c'))) Top css in
             c, Array t
         | E.Sexp (x, xs) ->
-            (* TODO weaken *)
             let css = List.map (infer ctx) xs in
             let c = List.fold_left (fun c (c', _) -> And (c, c')) Top css in
-            c, Sexp [x, List.map snd css]
+            let t = new_tv () in
+            And (c, SexpX (x, t, List.map snd css)), t
         | E.If (c, t, f) ->
             let c1, _ = infer ctx c in
             let c2, t = infer ctx t in
