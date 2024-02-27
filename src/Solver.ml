@@ -495,6 +495,8 @@ let solve (c : TT.c) : TT.t Subst.t =
     end in
 
     let module AS = Set.Make(Ans) in
+
+    (*
     let ans = Stream.fold (fun ans res ->
         let ans = AS.add (List.to_list logic_lama_t_to_ground res) ans in
 
@@ -502,8 +504,25 @@ let solve (c : TT.c) : TT.t Subst.t =
         then failwith "more than one solution found"
         else ans
     ) AS.empty res in
+    *)
+
+    let ans = Stream.fold (fun ans res ->
+        AS.add (List.to_list logic_lama_t_to_ground res) ans
+    ) AS.empty res in
 
     let ans = AS.elements ans in
+
+    (* type system has no most general type so we allow multiple different results *)
+
+    let ans = match ans with
+    | [] -> failwith "no one solution found"
+    | [ans] -> ans
+    | ans :: _ as anss ->
+        Printf.printf "More than one solution found:\n" ;
+        OrigList.iter print_endline
+            @@ OrigList.map (GT.show GT.list (GT.show ground_lama_t)) anss ;
+        ans
+    in
     *)
 
     let ans = Stream.take ~n:1 @@ Stream.map (List.to_list logic_lama_t_to_ground) res in

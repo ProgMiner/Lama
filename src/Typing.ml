@@ -453,6 +453,8 @@ module Type = struct
             let ts = List.map subst_t' @@ List.map snd xts in
             let t = subst_t' t in
 
+            (* TODO maybe convert to de Brujne notation to simplify alpha-equality check? *)
+
             (*
             (* naive approach *)
             let all_tvs = ftv IS.empty t in
