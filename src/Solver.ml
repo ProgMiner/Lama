@@ -215,17 +215,16 @@ and logic_lama_c_to_ground : logic_lama_c -> ground_lama_c = function
 
 (* xs[i] = x *)
 let rec list_index (i : Nat.injected) (xs : 'a List.injected) (x : 'a) = ocanren
-    { fresh x', xs' in xs == List.cons x' xs'
-    & { i == Nat.o & x == x'
-      | fresh i' in i == Nat.s i' & list_index i' xs' x
-      }
+    { fresh x', xs' in xs == x' :: xs' &
+        { i == 0 & x == x'
+        | fresh i' in i == Nat.s i' & list_index i' xs' x
+        }
     }
 
 (* res <=> exists i. xs[i] = x *)
-let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) =
-    let nil = List.nil () in ocanren
-    { xs == nil & res == false
-    | fresh x', xs' in xs == List.cons x' xs' &
+let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanren
+    { xs == [] & res == false
+    | fresh x', xs' in xs == x' :: xs' &
         { x == x' & res == true
         | x =/= x' & list_member x xs' res
         }
@@ -323,10 +322,14 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
     | { fresh i, xs, t in c' == CIndI (i, TSexp xs, t) & ind_i_sexp_hlp i xs t } (* C-IndISexp *)
     | { fresh xs in c' == CSexp (TSexp xs) } (* C-Sexp *)
     | { fresh x, xs, ts in c' == CSexpX (x, TSexp xs, ts) & sexp_x_hlp x xs ts } (* C-SexpX *)
+    (*
     | { fresh xs, c'', ts, t, ss, s in c' == CCall (TArrow (xs, c'', ts, t), ss, s)
         & call_hlp c xs c'' ts t ss s } (* C-Fun *)
+    *)
+    | { fresh ft, ts, t in c' == CCall (ft, ts, t) & call_hlp c ft ts t } (* C-Fun *)
     }
 
+(*
 and call_hlp
     (c : injected_lama_c)
     (fxs : int ilogic List.injected)
@@ -335,11 +338,21 @@ and call_hlp
     (ft : injected_lama_t)
     (ts : injected_lama_t List.injected)
     (t : injected_lama_t)
-    : goal = let nil = List.nil () in ocanren
-    { fxs == nil & c //- fc & fts == ts & ft == t
-    | fresh fx, fxs', s, fc', fts', ft' in fxs == List.cons fx fxs'
+    : goal = ocanren
+    { fxs == [] & fts == ts & ft == t & c //- fc
+    | fresh fx, fxs', s, fc', fts', ft' in fxs == fx :: fxs'
         & subst_c fx s fc fc' & List.mapo (subst_t fx s) fts fts' & subst_t fx s ft ft'
         & call_hlp c fxs' fc' fts' ft' ts t
+    }
+*)
+
+and call_hlp c ft' ts t = ocanren
+    { fresh fc, fts, ft in
+        { ft' == TArrow ([], fc, fts, ft) & fts == ts & ft == t & c //- fc
+        | fresh fx, fxs, s, ft'' in ft' == TArrow (fx :: fxs, fc, fts, ft)
+            & subst_t fx s (TArrow (fxs, fc, fts, ft)) ft''
+            & call_hlp c ft'' ts t
+        }
     }
 
 
@@ -386,7 +399,7 @@ and project_c : ground_lama_c -> TT.c = function
 | CSexpX (x, t, ts) -> TT.SexpX (x, project_t t, List.to_list project_t ts)
 | CCall (t, ss, s) -> TT.Call (project_t t, List.to_list project_t ss, project_t s)
 
-let solve (c : TT.c) : TT.t Subst.t =
+let make_inject () =
     let module M = Monad in
     let open M.Syntax in
 
@@ -452,6 +465,18 @@ let solve (c : TT.c) : TT.t Subst.t =
         M.return @@ cCall t ss s
     in
 
+    object
+
+        method free_vars = !free_vars
+
+        method list = inject_list
+        method t = inject_t
+        method c = inject_c
+    end
+
+let solve (c : TT.c) : TT.t Subst.t =
+    let inject = make_inject () in
+
     (*
     (* for debug *)
 
@@ -469,8 +494,8 @@ let solve (c : TT.c) : TT.t Subst.t =
     Stream.iter (fun res -> print_endline @@ GT.show logic_lama_c res) res ;
     *)
 
-    let make_goal (ans : injected_lama_t List.injected) : goal = inject_c TT.IS.empty c (fun c ->
-        let free_vars = Subst.to_seq !free_vars in
+    let make_goal (ans : injected_lama_t List.injected) : goal = inject#c TT.IS.empty c (fun c ->
+        let free_vars = Subst.to_seq inject#free_vars in
 
         print_string "Free variables: " ;
         Seq.iter (Printf.printf "%d ") @@ Seq.map fst free_vars ;
@@ -535,7 +560,7 @@ let solve (c : TT.c) : TT.t Subst.t =
 
     print_endline @@ "Answer: " ^ GT.show GT.list (GT.show ground_lama_t) ans ;
 
-    let free_vars = Seq.map fst @@ Subst.to_seq !free_vars in
+    let free_vars = Seq.map fst @@ Subst.to_seq inject#free_vars in
 
     let subst = Seq.fold_left (fun subst (v, t) -> Subst.add v t subst) Subst.empty
         @@ Seq.zip free_vars (OrigList.to_seq ans) in

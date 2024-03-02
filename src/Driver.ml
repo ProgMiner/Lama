@@ -223,6 +223,12 @@ let[@ocaml.warning "-32"] main =
                     , [T.Type.Name 0]
                     , T.Type.Int
                     )
+                ; "fix", T.Type.Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [0; 1]
+                    , T.Type.Call (T.Type.Name 0, [T.Type.Name 1], T.Type.Name 1)
+                    , [T.Type.Name 0]
+                    , T.Type.Name 1
+                    )
                 ] in
 
             let c, t = (T.Type.make_infer ())#term ctx prog' in

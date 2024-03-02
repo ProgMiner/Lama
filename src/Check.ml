@@ -74,6 +74,7 @@ let make_goal ts = ocanren
     }
 *)
 
+(*
 let i19 = !!19
 let i26 = !!26
 
@@ -83,6 +84,79 @@ let make_goal ts = ocanren
         , CEq (t7, TArrow ([i26], CCall (t6, [TInt], TName i26), [TInt], TInt))
         )
     & ts == [t6; t7]
+    }
+*)
+
+(*
+Call( forall ({0, 1}). (Call(tv_0, [tv_1], tv_1)) => ([tv_0]) -> tv_1
+    , [forall ({2}). (Call(tv_2, [Int], Int)) => ([tv_2]) -> forall ({}). () => ([Int]) -> Int]
+    , tv_6
+    )
+*)
+
+let i0 = !!0
+let i1 = !!1
+let i2 = !!2
+
+(*
+let make_goal ts = ocanren
+    { fresh t6 in CTop //- CCall
+        ( TArrow ([i0; i1], CCall (TName i0, [TName i1], TName i1), [TName i0], TName i1)
+        , [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))]
+        , t6
+        )
+    & ts == [t6]
+    }
+
+let make_goal ts = ocanren
+    { fresh t6 in call_hlp CTop [i0; i1] (CCall (TName i0, [TName i1], TName i1)) [TName i0] (TName i1)
+        [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
+    & ts == [t6]
+    }
+
+let make_goal ts = ocanren
+    { fresh t6, t7 in call_hlp CTop [i1] (CCall (t7, [TName i1], TName i1)) [t7] (TName i1)
+        [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
+    & ts == [t6]
+    }
+*)
+
+(*
+let make_goal c' = ocanren
+    { fresh t7, t' in subst_c i1 t' (CCall (t7, [TName i1], TName i1)) c' }
+
+let res () = Stream.take ~n:10 @@
+    run q make_goal (fun x -> x#reify reify_lama_c)
+*)
+
+(*
+let make_goal ts = ocanren
+    { fresh t6, t7, t8 in call_hlp CTop [] (CCall (t7, [t8], t8)) [t7] (t8)
+        [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
+    & ts == [t6]
+    }
+*)
+
+(*
+let make_goal ts = ocanren
+    { fresh t6, ft, ft', t7, t8 in
+      subst_t i0 t7 (TArrow ([], CCall (TName i0, [TName i1], TName i1), [TName i0], TName i1)) ft
+    & subst_t i1 t8 ft ft'
+    & CTop //- CCall (ft', [t6], t6)
+    & ts == [t6]
+    }
+*)
+
+let make_goal ts = ocanren
+    { fresh t6, t7 in call_hlp CTop (TArrow ([i1], (CCall (t7, [TName i1], TName i1)), [t7], (TName i1)))
+        [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
+    & ts == [t6]
+    }
+
+let make_goal ts = ocanren
+    { fresh t6, t7, t8 in call_hlp CTop (TArrow ([], (CCall (t7, [t8], t8)), [t7], (t8)))
+        [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
+    & ts == [t6]
     }
 
 let res () = Stream.take ~n:10 @@

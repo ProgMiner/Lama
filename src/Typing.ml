@@ -300,6 +300,7 @@ module Type = struct
         let c = list_c c in
         let s, c = unify c in
         c_list c, s
+        (* c_list c, Subst.empty *)
 
     (* split constraint by given bound and free type variables *)
 
