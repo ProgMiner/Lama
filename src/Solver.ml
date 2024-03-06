@@ -230,39 +230,6 @@ let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanr
         }
     }
 
-let ind_sexp_hlp xs (t : injected_lama_t) : goal =
-    let f' (t' : injected_lama_t) res : goal = ocanren
-        { t == t' & res == true
-        | t =/= t' & res == false
-        } in
-
-    let f xts res : goal = ocanren {
-        fresh x, ts, ts' in xts == (x, ts)
-        & List.mapo f' ts ts'
-        & List.allo ts' res
-    } in
-
-    ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
-
-let ind_i_sexp_hlp (i : Nat.injected) xs (t : injected_lama_t) : goal =
-    let f xts res : goal = ocanren {
-        fresh x, ts, t' in xts == (x, ts) & list_index i ts t'
-            & { t == t' & res == true | t =/= t' & res == false }
-    } in
-
-    ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
-
-let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goal =
-    let f xts res : goal = ocanren {
-        fresh x', ts' in xts == (x, ts') &
-        { x == x' & ts == ts' & res == true
-        | x =/= x' & res == false
-        | ts =/= ts' & res == false
-        }
-    } in
-
-    ocanren { fresh xs' in List.mapo f xs xs' & List.anyo xs' true }
-
 let rec subst_t s t t' =
     let rec subst_v x s t = ocanren
         { s == [] & t == TName x
@@ -338,7 +305,43 @@ let rec make_subst xs res = ocanren
         & make_subst xs' res'
     }
 
-let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
+let ind_sexp_hlp xs (t : injected_lama_t) : goal =
+    let f' (t' : injected_lama_t) res : goal = ocanren
+        { t == t' & res == true
+        | t =/= t' & res == false
+        } in
+
+    let f xts res : goal = ocanren {
+        fresh x, ts, ts' in xts == (x, ts)
+        & List.mapo f' ts ts'
+        & List.allo ts' res
+    } in
+
+    ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
+
+let ind_i_sexp_hlp (i : Nat.injected) xs (t : injected_lama_t) : goal =
+    let f xts res : goal = ocanren {
+        fresh x, ts, t' in xts == (x, ts) & list_index i ts t'
+            & { t == t' & res == true | t =/= t' & res == false }
+    } in
+
+    ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
+
+let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goal =
+    let f xts res : goal = ocanren
+        { xts == (x, ts) & res == true
+        | xts =/= (x, ts) & res == false
+        }
+    in
+
+    ocanren { fresh xs' in List.mapo f xs xs' & List.anyo xs' true }
+
+let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
+    (*
+    debug_var c' (Fun.flip reify_lama_c) (fun c's ->
+    Printf.printf "||- %s\n" (GT.show GT.list (GT.show logic_lama_c) c's) ;
+    *)
+    ocanren
     { c == c' (* C-Refl *)
     | c' == CTop (* C-Top *)
     | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c1 & c //- c2 } (* C-And *)
@@ -360,6 +363,7 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
         & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
         & c //- fc' } (* C-Call *)
     }
+    (* ) *)
 
 
 (* Continuation-passing style monad *)
@@ -385,13 +389,13 @@ let rec project_t : ground_lama_t -> TT.t = function
 | TInt -> TT.Int
 | TString -> TT.String
 | TArrow (xs, c, ts, t) -> TT.Arrow
-    ( TT.IS.of_seq @@ OrigList.to_seq @@ List.to_list (fun x -> x) xs
+    ( TT.IS.of_seq @@ OrigList.to_seq @@ List.to_list Fun.id xs
     , project_c c
     , List.to_list project_t ts
     , project_t t
     )
 | TArray t -> TT.Array (project_t t)
-| TSexp _ -> failwith "not implemented (sexp)" (* TODO *)
+| TSexp xs -> TT.Sexp (List.to_list (fun (x, ts) -> x, List.to_list project_t ts) xs)
 
 and project_c : ground_lama_c -> TT.c = function
 | CTop -> TT.Top
@@ -437,7 +441,11 @@ let make_inject () =
 
         M.return @@ tArrow xs c ts t
     | TT.Array t -> let* t = inject_t bvs t in M.return @@ tArray t
-    | TT.Sexp _ -> failwith "not implemented (sexp)" (* TODO *)
+    | TT.Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
+
+    and inject_sexp bvs (x, ts) =
+        let* ts = inject_list (inject_t bvs) ts in
+        M.return !!(!!x, ts)
 
     and inject_c (bvs : TT.IS.t) : TT.c -> injected_lama_c M.t = function
     | TT.Top -> M.return @@ cTop ()

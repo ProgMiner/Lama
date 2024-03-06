@@ -337,8 +337,7 @@ module Type = struct
         in
 
         (* build graph *)
-        List.iter (fun tvs -> IS.iter (add_edges tvs) tvs)
-            @@ List.map snd c ;
+        List.iter (fun tvs -> IS.iter (add_edges tvs) tvs) @@ List.map snd c ;
 
         let visited = Stdlib.ref IS.empty in
 
@@ -415,6 +414,7 @@ module Type = struct
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
             let c2, t = infer ctx e in
+            (* TODO apply fixpoint on mutually recursive definitions *)
             And (c1, c2), t
         | E.Seq (l, r) ->
             let c1, _ = infer ctx l in
