@@ -99,6 +99,9 @@ let i1 = !!1
 let i2 = !!2
 
 (*
+Call(\/ t0, t1. Call(t0, t1, t1) => (t0) -> t1, \/ t2. Call(t2, Int, Int) => (t2) -> (Int) -> Int)
+*)
+
 let make_goal ts = ocanren
     { fresh t6 in CTop //- CCall
         ( TArrow ([i0; i1], CCall (TName i0, [TName i1], TName i1), [TName i0], TName i1)
@@ -108,6 +111,7 @@ let make_goal ts = ocanren
     & ts == [t6]
     }
 
+(*
 let make_goal ts = ocanren
     { fresh t6 in call_hlp CTop [i0; i1] (CCall (TName i0, [TName i1], TName i1)) [TName i0] (TName i1)
         [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
@@ -147,6 +151,7 @@ let make_goal ts = ocanren
     }
 *)
 
+(*
 let make_goal ts = ocanren
     { fresh t6, t7 in call_hlp CTop (TArrow ([i1], (CCall (t7, [TName i1], TName i1)), [t7], (TName i1)))
         [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
@@ -158,6 +163,7 @@ let make_goal ts = ocanren
         [TArrow ([i2], CCall(TName i2, [TInt], TInt), [TName i2], TArrow ([], CTop, [TInt], TInt))] t6
     & ts == [t6]
     }
+*)
 
 let res () = Stream.take ~n:10 @@
     run q make_goal (fun x -> x#reify @@ Std.List.reify reify_lama_t)

@@ -189,10 +189,10 @@ module Type = struct
     | Int -> fvs
     | String -> fvs
     | Arrow (xs, c, ts, t) ->
-        let fvs = List.fold_left ftv fvs ts in
-        let fvs = ftv fvs t in
-        let fvs = ftv_c fvs c in
-        IS.diff fvs xs
+        let fvs' = List.fold_left ftv IS.empty ts in
+        let fvs' = ftv fvs' t in
+        let fvs' = ftv_c fvs' c in
+        IS.union fvs (IS.diff fvs' xs)
     | Array t -> ftv fvs t
     | Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
 
@@ -288,7 +288,7 @@ module Type = struct
 
             let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
             Subst.union (fun _ -> failwith "duplicated variables in substitution") s s', res
-        | c -> s, subst_c (subst_map_to_fun s) IS.empty c :: res
+        | c -> s, c :: res
         in
 
         fun c -> List.fold_left f (Subst.empty, []) c
@@ -299,7 +299,7 @@ module Type = struct
     let simplify c =
         let c = list_c c in
         let s, c = unify c in
-        c_list c, s
+        subst_c (subst_map_to_fun s) IS.empty (c_list c), s
         (* c_list c, Subst.empty *)
 
     (* split constraint by given bound and free type variables *)
@@ -319,6 +319,9 @@ module Type = struct
     let split_c bvs fvs c =
         let bvs = IS.diff bvs fvs in
         let c = List.map (fun c -> c, IS.diff (ftv_c IS.empty c) fvs) @@ list_c c in
+
+        Printf.printf "Source free variables: %s\n"
+            @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq fvs ;
 
         Printf.printf "Source bound variables: %s\n"
             @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq bvs ;
@@ -449,8 +452,9 @@ module Type = struct
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
             let c, t = infer ctx' b in
             let c, s = simplify c in
-            let fvs = ftv_context ctx in
-            let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
+            let sf = subst_map_to_fun s in
+            let fvs = ftv_context @@ Context.map (subst_t sf IS.empty) ctx in
+            let subst_t' = subst_t sf IS.empty in
             let ts = List.map subst_t' @@ List.map snd xts in
             let t = subst_t' t in
 

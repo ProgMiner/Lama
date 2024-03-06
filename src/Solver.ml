@@ -263,45 +263,79 @@ let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goa
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.anyo xs' true }
 
-let rec subst_t x s t t' = ocanren
-    { t == TName x & t' == s
-    | { fresh y in y =/= x & t == TName y & t' == t }
-    | t == TInt & t' == TInt
-    | t == TString & t' == TString
-    | { fresh fxs, fc, fts, ft, has_var in t == TArrow fxs fc fts ft
-        & list_member x fxs has_var &
-        { has_var == true & t == t'
-        | has_var == false & fresh fc', fts', ft' in subst_c x s fc fc'
-            & List.mapo (subst_t x s) fts fts' & subst_t x s ft ft'
-            & t' == TArrow fxs fc' fts' ft'
-        } }
-    | { fresh at, at' in t == TArray at & subst_t x s at at' & t' == TArray at' }
-    (* | { fresh xs in t == TSexp xs & TODO } *)
-    }
+let rec subst_t s t t' =
+    let rec subst_v x s t = ocanren
+        { s == [] & t == TName x
+        | fresh x', t', s' in s == (x', t') :: s' &
+            { x' == x & t == t'
+            | x' =/= x & subst_v x s' t
+            }
+        }
+    in
 
-and subst_c x s c c' = ocanren
+    let rec filter_subst xs s res = ocanren
+        { s == [] & res == []
+        | fresh x, t, s', has_var in s == (x, t) :: s'
+            & list_member x xs has_var &
+            { has_var == true & filter_subst xs s' res
+            | has_var == false & fresh res' in res == (x, t) :: res'
+                & filter_subst xs s' res'
+            }
+        }
+    in
+
+    ocanren
+        { { fresh x in t == TName x & subst_v x s t' }
+        | t == TInt & t' == TInt
+        | t == TString & t' == TString
+        | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
+            & t' == TArrow (fxs, fc', fts', ft')
+            & filter_subst fxs s s'
+            & subst_c s' fc fc'
+            & List.mapo (subst_t s') fts fts'
+            & subst_t s' ft ft'
+            }
+        | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
+        (* | { fresh xs in t == TSexp xs & TODO } *)
+        }
+
+and subst_c s c c' = ocanren
     { c == CTop & c' == CTop
     | { fresh c1, c2, c1', c2' in c == CAnd (c1, c2)
-        & subst_c x s c1 c1' & subst_c x s c2 c2'
-        & c' == CAnd (c1', c2') }
+        & c' == CAnd (c1', c2')
+        & subst_c s c1 c1'
+        & subst_c s c2 c2' }
     | { fresh t1, t2, t1', t2' in c == CEq (t1, t2)
-        & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CEq (t1', t2') }
-    | { fresh t, t' in c == CBox t & subst_t x s t t' & c' == CBox t' }
-    | { fresh t, t' in c == CFun t & subst_t x s t t' & c' == CFun t' }
+        & c' == CEq (t1', t2')
+        & subst_t s t1 t1'
+        & subst_t s t2 t2' }
+    | { fresh t, t' in c == CBox t & c' == CBox t' & subst_t s t t' }
+    | { fresh t, t' in c == CFun t & c' == CFun t' & subst_t s t t' }
     | { fresh t1, t2, t1', t2' in c == CInd (t1, t2)
-        & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CInd (t1', t2') }
+        & c' == CInd (t1', t2')
+        & subst_t s t1 t1'
+        & subst_t s t2 t2' }
     | { fresh i, t1, t2, t1', t2' in c == CIndI (i, t1, t2)
-        & subst_t x s t1 t1' & subst_t x s t2 t2'
-        & c' == CIndI (i, t1', t2') }
-    | { fresh t, t' in c == CSexp t & subst_t x s t t' & c' == CSexp t' }
+        & c' == CIndI (i, t1', t2')
+        & subst_t s t1 t1'
+        & subst_t s t2 t2' }
+    | { fresh t, t' in c == CSexp t & c' == CSexp t' & subst_t s t t' }
     | { fresh x', t, ts, t', ts' in c == CSexpX (x', t, ts)
-        & subst_t x s t t' & List.mapo (subst_t x s) ts ts'
-        & c' == CSexpX (x', t', ts') }
+        & c' == CSexpX (x', t', ts')
+        & subst_t s t t'
+        & List.mapo (subst_t s) ts ts' }
     | { fresh f, ts, t, f', ts', t' in c == CCall (f, ts, t)
-        & subst_t x s f f' & List.mapo (subst_t x s) ts ts' & subst_t x s t t'
-        & c' == CCall (f', ts', t')}
+        & c' == CCall (f', ts', t')
+        & subst_t s f f'
+        & subst_t s t t'
+        & List.mapo (subst_t s) ts ts' }
+    }
+
+let rec make_subst xs res = ocanren
+    { xs == [] & res == []
+    | fresh x, s, xs', res' in xs == x :: xs'
+        & res == (x, s) :: res'
+        & make_subst xs' res'
     }
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
@@ -322,37 +356,9 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
     | { fresh i, xs, t in c' == CIndI (i, TSexp xs, t) & ind_i_sexp_hlp i xs t } (* C-IndISexp *)
     | { fresh xs in c' == CSexp (TSexp xs) } (* C-Sexp *)
     | { fresh x, xs, ts in c' == CSexpX (x, TSexp xs, ts) & sexp_x_hlp x xs ts } (* C-SexpX *)
-    (*
-    | { fresh xs, c'', ts, t, ss, s in c' == CCall (TArrow (xs, c'', ts, t), ss, s)
-        & call_hlp c xs c'' ts t ss s } (* C-Fun *)
-    *)
-    | { fresh ft, ts, t in c' == CCall (ft, ts, t) & call_hlp c ft ts t } (* C-Fun *)
-    }
-
-(*
-and call_hlp
-    (c : injected_lama_c)
-    (fxs : int ilogic List.injected)
-    (fc : injected_lama_c)
-    (fts : injected_lama_t List.injected)
-    (ft : injected_lama_t)
-    (ts : injected_lama_t List.injected)
-    (t : injected_lama_t)
-    : goal = ocanren
-    { fxs == [] & fts == ts & ft == t & c //- fc
-    | fresh fx, fxs', s, fc', fts', ft' in fxs == fx :: fxs'
-        & subst_c fx s fc fc' & List.mapo (subst_t fx s) fts fts' & subst_t fx s ft ft'
-        & call_hlp c fxs' fc' fts' ft' ts t
-    }
-*)
-
-and call_hlp c ft' ts t = ocanren
-    { fresh fc, fts, ft in
-        { ft' == TArrow ([], fc, fts, ft) & fts == ts & ft == t & c //- fc
-        | fresh fx, fxs, s, ft'' in ft' == TArrow (fx :: fxs, fc, fts, ft)
-            & subst_t fx s (TArrow (fxs, fc, fts, ft)) ft''
-            & call_hlp c ft'' ts t
-        }
+    | { fresh fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (TArrow (fxs, fc, fts, ft), ts, t)
+        & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
+        & c //- fc' } (* C-Call *)
     }
 
 
