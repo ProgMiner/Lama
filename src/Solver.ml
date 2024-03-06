@@ -230,41 +230,53 @@ let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanr
         }
     }
 
+let rec subst_v x s t = ocanren
+    { s == [] & t == TName x
+    | fresh x', t', s' in s == (x', t') :: s' &
+        { x' == x & t == t'
+        | x' =/= x & subst_v x s' t
+        }
+    }
+
+let rec filter_subst xs s res = ocanren
+    { s == [] & res == []
+    | fresh x, t, s', has_var in s == (x, t) :: s'
+        & list_member x xs has_var &
+        { has_var == true & filter_subst xs s' res
+        | has_var == false & fresh res' in res == (x, t) :: res'
+            & filter_subst xs s' res'
+        }
+    }
+
 let rec subst_t s t t' =
-    let rec subst_v x s t = ocanren
-        { s == [] & t == TName x
-        | fresh x', t', s' in s == (x', t') :: s' &
-            { x' == x & t == t'
-            | x' =/= x & subst_v x s' t
-            }
-        }
-    in
-
-    let rec filter_subst xs s res = ocanren
-        { s == [] & res == []
-        | fresh x, t, s', has_var in s == (x, t) :: s'
-            & list_member x xs has_var &
-            { has_var == true & filter_subst xs s' res
-            | has_var == false & fresh res' in res == (x, t) :: res'
-                & filter_subst xs s' res'
-            }
-        }
-    in
-
+    (*
+    debug_var t (Fun.flip reify_lama_t) (fun t ->
+        debug_var t' (Fun.flip reify_lama_t) (fun t' ->
+            Printf.printf "subst : %s |-> %s\n"
+                (GT.show GT.list (GT.show logic_lama_t) t)
+                (GT.show GT.list (GT.show logic_lama_t) t') ;
+            success)) &&&
+    *)
     ocanren
-        { { fresh x in t == TName x & subst_v x s t' }
-        | t == TInt & t' == TInt
-        | t == TString & t' == TString
-        | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
-            & t' == TArrow (fxs, fc', fts', ft')
-            & filter_subst fxs s s'
-            & subst_c s' fc fc'
-            & List.mapo (subst_t s') fts fts'
-            & subst_t s' ft ft'
-            }
-        | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
-        (* | { fresh xs in t == TSexp xs & TODO } *)
+    { { fresh x in t == TName x & subst_v x s t' }
+    | t == TInt & t' == TInt
+    | t == TString & t' == TString
+    | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
+        & t' == TArrow (fxs, fc', fts', ft')
+        & filter_subst fxs s s'
+        & subst_c s' fc fc'
+        & List.mapo (subst_t s') fts fts'
+        & subst_t s' ft ft'
         }
+    | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
+    | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
+    }
+
+and subst_sexp s xts xts' = ocanren
+    { fresh x, ts, ts' in xts == (x, ts)
+        & xts' == (x, ts')
+        & List.mapo (subst_t s) ts ts'
+    }
 
 and subst_c s c c' = ocanren
     { c == CTop & c' == CTop
@@ -339,7 +351,8 @@ let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goa
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
     debug_var c' (Fun.flip reify_lama_c) (fun c's ->
-    Printf.printf "||- %s\n" (GT.show GT.list (GT.show logic_lama_c) c's) ;
+        Printf.printf "||- %s\n" (GT.show GT.list (GT.show logic_lama_c) c's) ;
+        success) &&&
     *)
     ocanren
     { c == c' (* C-Refl *)
@@ -363,7 +376,6 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
         & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
         & c //- fc' } (* C-Call *)
     }
-    (* ) *)
 
 
 (* Continuation-passing style monad *)
