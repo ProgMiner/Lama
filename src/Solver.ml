@@ -225,7 +225,7 @@ let rec list_index (i : Nat.injected) (xs : 'a List.injected) (x : 'a) = ocanren
 let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanren
     { xs == [] & res == false
     | fresh x', xs' in xs == x' :: xs' &
-        { x == x' & res == true
+        { res == true & x == x'
         | x =/= x' & list_member x xs' res
         }
     }
@@ -319,8 +319,8 @@ let rec make_subst xs res = ocanren
 
 let ind_sexp_hlp xs (t : injected_lama_t) : goal =
     let f' (t' : injected_lama_t) res : goal = ocanren
-        { t == t' & res == true
-        | t =/= t' & res == false
+        { res == true & t == t'
+        | res == false & t =/= t'
         } in
 
     let f xts res : goal = ocanren {
@@ -333,25 +333,93 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
 let ind_i_sexp_hlp (i : Nat.injected) xs (t : injected_lama_t) : goal =
     let f xts res : goal = ocanren {
-        fresh x, ts, t' in xts == (x, ts) & list_index i ts t'
-            & { t == t' & res == true | t =/= t' & res == false }
+        fresh x, ts, t' in xts == (x, ts) &
+            { res == false & t =/= t'
+            | res == true & t == t'
+            } &
+            list_index i ts t'
     } in
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
 
 let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goal =
-    let f xts res : goal = ocanren
-        { xts == (x, ts) & res == true
-        | xts =/= (x, ts) & res == false
+    (* straightforward solution don't work here *)
+
+    (*
+    let f n xts res = ocanren {
+        fresh x', ts', n' in xts == (x', ts') & List.lengtho ts' n' &
+            { res == false & { x =/= x' | n =/= n' }
+            | res == true & x == x' & n == n'
+            }
+    } in
+
+    let g xts res = ocanren
+        { res == false & xts =/= (x, ts)
+        | res == true & xts == (x, ts)
         }
     in
 
-    ocanren { fresh xs' in List.mapo f xs xs' & List.anyo xs' true }
+    ocanren {
+        fresh n, xs', xs'' in xs' =/= [] & List.allo xs'' true & List.lengtho ts n
+            & List.filtero (f n) xs xs' & List.mapo g xs' xs''
+    }
+    *)
+
+    let f n xts res = ocanren {
+        fresh x', ts', n' in xts == (x', ts') & List.lengtho ts' n' &
+            { res == true & { x =/= x' | n =/= n' }
+            | res == false & x == x' & n == n'
+            }
+    } in
+
+    let f n xs = ocanren { fresh xs' in List.mapo (f n) xs xs' & List.allo xs' true } in
+
+    (* loops forever *)
+
+    (*
+    let initial_xs = xs in
+
+    let rec g n xs =
+        debug_var initial_xs (Fun.flip @@ List.reify @@ Pair.reify Reifier.reify (List.reify reify_lama_t)) (function
+        | [xs] ->
+            print_string "xs = " ;
+            print_endline @@ GT.show List.logic (GT.show Pair.logic
+                (GT.show logic @@ GT.show GT.string)
+                (GT.show List.logic @@ GT.show logic_lama_t)) xs ;
+            success
+        ) &&&
+        ocanren {
+        fresh x', ts', xs' in xs == (x', ts') :: xs' &
+            { x == x' & ts == ts' & f n xs' (* found => check no any such in tail *)
+            | x =/= x' & g n xs'            (* wrong label => go next *)
+            | x == x' & fresh n' in List.lengtho ts' n' (* right label => check amount of args *)
+                & n =/= n' & g n xs'        (* wrong amount => go next *)
+            }
+        }
+    in
+    *)
+
+    (* FIXME will not work *)
+    let rec g n xs =
+        debug_var xs (Fun.flip @@ List.reify @@ Pair.reify Reifier.reify (List.reify reify_lama_t)) (function
+        | [Var _] -> ocanren { fresh xs' in xs == (x, ts) :: xs' }
+        | [Value _] -> ocanren {
+            fresh x', ts', xs' in xs == (x', ts') :: xs' &
+                { x == x' & ts == ts' & f n xs' (* found => check no any such in tail *)
+                | x =/= x' & g n xs'            (* wrong label => go next *)
+                | x == x' & fresh n' in List.lengtho ts' n' (* right label => check amount of args *)
+                    & n =/= n' & g n xs'        (* wrong amount => go next *)
+                }
+        })
+    in
+
+    ocanren { fresh n in List.lengtho ts n & g n xs }
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
     debug_var c' (Fun.flip reify_lama_c) (fun c's ->
-        Printf.printf "||- %s\n" (GT.show GT.list (GT.show logic_lama_c) c's) ;
+        Printf.printf "||- %s" (GT.show GT.list (GT.show logic_lama_c) c's) ;
+        print_newline () ;
         success) &&&
     *)
     ocanren

@@ -221,7 +221,7 @@ let[@ocaml.warning "-32"] main =
                     ( T.Type.IS.of_seq @@ List.to_seq [0]
                     , T.Type.Top
                     , [T.Type.Name 0]
-                    , T.Type.Int
+                    , T.Type.String
                     )
                 ; "fix", T.Type.Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [0; 1]
