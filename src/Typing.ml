@@ -67,67 +67,6 @@ module Expr = struct
     | x, (_, `Fun      (xs,  t)) -> Fun (x, xs, from_language t)
     | x, (_, `Variable  None   ) -> Var (x, Int 0)
     | x, (_, `Variable (Some t)) -> Var (x, from_language t)
-
-    (* convert all scrutinees to variables, don't erase Named patterns *)
-
-    let case_of_variable_pass ast =
-        let module M = struct
-
-            module SS = Set.Make(String)
-
-            let prev_idx = Stdlib.ref 0
-
-            let rec next_var ctx =
-                let idx = !prev_idx + 1 in
-                prev_idx := idx ;
-
-                let var = Printf.sprintf "var!%d" idx in
-
-                if SS.mem var ctx
-                then next_var ctx
-                else var
-
-            class pass (eval_decl, fself as _mutuals_pack) = object
-                inherit [_, _, SS.t] eval_t_t_stub _mutuals_pack
-
-                method! c_Scope ctx _ ds t =
-                    let (ds, ctx) = List.fold_left (
-                        fun (ds, ctx) d -> eval_decl ctx d :: ds, SS.add (decl_name d) ctx
-                    ) ([], ctx) ds in
-
-                    Scope (List.rev ds, fself ctx t)
-
-                method! c_Case ctx _ t bs =
-                    let var = next_var ctx in
-                    let t = fself ctx t in
-
-                    let process (p, b) =
-                        (* Printf.eprintf "pattern: %s\n" @@ GT.show Pattern.t p ; *)
-
-                        let bindings = Pattern.bindings p in
-                        let ctx = List.fold_left (fun ctx (x, _) -> SS.add x ctx) ctx bindings in
-                        let b = fself ctx b in
-
-                        let path_to_subscript =
-                            List.fold_left (fun xs i -> Subscript (xs, Int i)) (Name var)
-                        in
-
-                        let ds = List.map (fun (x, p) -> Var (x, path_to_subscript p)) bindings in
-
-                        (* Printf.eprintf "decls: %s\n" @@ GT.show list (GT.show decl) ds ; *)
-
-                        p, if ds = [] then b else Scope (ds, b)
-                    in
-
-                    let bs = List.map process bs in
-
-                    Scope ([Var (var, t)], Case (Name var, bs))
-            end
-
-            let pass = let (_, f) = fix_decl eval_decl_0 (new pass) in f SS.empty
-        end in
-
-        M.pass ast
 end
 
 module Type = struct
@@ -136,150 +75,189 @@ module Type = struct
     module Context = Map.Make(String)
     module Subst = Map.Make(Int)
 
-    type t =
-    | Name      of int              (* type variable name *)
-    | Int                           (* integer *)
-    | String                        (* string *)
-    | Arrow     of IS.t * c * t list * t (* arrow *)
-    | Array     of t                (* array *)
-    | Sexp      of (string * t list) list (* S-expression *)
+    type t = [
+    | `Name      of int              (* type variable name *)
+    | `Int                           (* integer *)
+    | `String                        (* string *)
+    | `Array     of t                (* array *)
+    | `Sexp      of (string * t list) list (* S-expression *)
+    | `Arrow     of IS.t * c * t list * t (* arrow *)
+    ]
 
-    and c =
-    | Top                           (* always true *)
-    | And       of c * c            (* logical AND *)
-    | Eq        of t * t            (* syntax equality *)
-    | Box       of t                (* is boxed type *)
-    | Fun       of t                (* is arrow *)
-    | Ind       of t * t            (* indexable *)
-    | IndI      of int * t * t      (* specified index *)
-    | SexpC     of t                (* is sexp type *)
-    | SexpX     of string * t * t list (* sexp with label and types *)
-    | Call      of t * t list * t   (* callable with args and result types *)
+    and p = [
+    | `Wildcard
+    | `Typed    of t * p
+    | `Array    of p list
+    | `Sexp     of string * p list
+    | `Boxed
+    | `Unboxed
+    | `StringTag
+    | `ArrayTag
+    | `SexpTag
+    | `FunTag
+    ]
+
+    and c = [
+    | `Top                           (* always true *)
+    | `And       of c * c            (* logical AND *)
+    | `Eq        of t * t            (* syntax equality *)
+    | `Ind       of t * t            (* indexable *)
+    | `Call      of t * t list * t   (* callable with args and result types *)
+    | `Match     of t * p list       (* match type with patterns *)
+    | `Sexp      of string * t * t list (* sexp with label and types *)
+    ]
 
     let show_is is = match IS.elements is with
     | i :: is -> (List.fold_left (Printf.sprintf "%s, %d") (Printf.sprintf "{%d" i) is) ^ "}"
     | [] -> "{}"
 
-    let rec show_t = function
-    | Name x -> Printf.sprintf "tv_%d" x
-    | Int -> "Int"
-    | String -> "String"
-    | Arrow (xs, c, ts, t) -> Printf.sprintf "forall (%s). (%s) => (%s) -> %s"
+    let rec show_t : t -> _ = function
+    | `Name x -> Printf.sprintf "tv_%d" x
+    | `Int -> "Int"
+    | `String -> "String"
+    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall (%s). (%s) => (%s) -> %s"
         (show_is xs) (show_c c) (GT.show list show_t ts) (show_t t)
-    | Array t -> Printf.sprintf "[%s]" @@ show_t t
-    | Sexp vs -> "Sexp "
+    | `Array t -> Printf.sprintf "[%s]" @@ show_t t
+    | `Sexp vs -> "Sexp "
         ^ GT.show list (fun (x, ts) -> Printf.sprintf "%s (%s)" x @@ GT.show list show_t ts) vs
 
-    and show_c = function
-    | Top -> "T"
-    | And (l, r) -> Printf.sprintf "%s && %s" (show_c l) (show_c r)
-    | Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
-    | Box t -> Printf.sprintf "Box(%s)" @@ show_t t
-    | Fun t -> Printf.sprintf "Fun(%s)" @@ show_t t
-    | Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
-    | IndI (i, l, r) -> Printf.sprintf "Ind_%d(%s, %s)" i (show_t l) (show_t r)
-    | SexpC t -> Printf.sprintf "Sexp(%s)" @@ show_t t
-    | SexpX (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (GT.show list show_t ts)
-    | Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
+    and show_p : p -> _ = function
+    | `Wildcard -> "_"
+    | `Typed (t, p) -> Printf.sprintf "%s @ %s" (show_t t) (show_p p)
+    | `Array ps -> GT.show list show_p ps
+    | `Sexp (x, ps) -> Printf.sprintf "%s %s" x @@ GT.show list show_p ps
+    | `Boxed -> "#box"
+    | `Unboxed -> "#val"
+    | `StringTag -> "#str"
+    | `ArrayTag -> "#array"
+    | `SexpTag -> "#sexp"
+    | `FunTag -> "#fun"
+
+    and show_c : c -> _ = function
+    | `Top -> "T"
+    | `And (l, r) -> Printf.sprintf "%s && %s" (show_c l) (show_c r)
+    | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
+    | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
+    | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
+    | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (GT.show list show_p ps)
+    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (GT.show list show_t ts)
 
     (* free type variables *)
 
-    let rec ftv fvs = function
-    | Name x -> IS.add x fvs
-    | Int -> fvs
-    | String -> fvs
-    | Arrow (xs, c, ts, t) ->
+    let rec ftv fvs : t -> _ = function
+    | `Name x -> IS.add x fvs
+    | `Int -> fvs
+    | `String -> fvs
+    | `Arrow (xs, c, ts, t) ->
         let fvs' = List.fold_left ftv IS.empty ts in
         let fvs' = ftv fvs' t in
         let fvs' = ftv_c fvs' c in
         IS.union fvs (IS.diff fvs' xs)
-    | Array t -> ftv fvs t
-    | Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
+    | `Array t -> ftv fvs t
+    | `Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
 
-    and ftv_c fvs = function
-    | Top -> fvs
-    | And (l, r) -> ftv_c (ftv_c fvs l) r
-    | Eq (l, r) -> ftv (ftv fvs l) r
-    | Box t -> ftv fvs t
-    | Fun t -> ftv fvs t
-    | Ind (l, r) -> ftv (ftv fvs l) r
-    | IndI (_, l, r) -> ftv (ftv fvs l) r
-    | SexpC t -> ftv fvs t
-    | SexpX (_, t, ts) -> List.fold_left ftv (ftv fvs t) ts
-    | Call (t, ts, s) -> ftv (List.fold_left ftv (ftv fvs t) ts) s
+    and ftv_p fvs : p -> _ = function
+    | `Wildcard -> fvs
+    | `Typed (t, p) -> ftv_p (ftv fvs t) p
+    | `Array ps -> List.fold_left ftv_p fvs ps
+    | `Sexp (_, ps) -> List.fold_left ftv_p fvs ps
+    | `Boxed -> fvs
+    | `Unboxed -> fvs
+    | `StringTag -> fvs
+    | `ArrayTag -> fvs
+    | `SexpTag -> fvs
+    | `FunTag -> fvs
+
+    and ftv_c fvs : c -> _ = function
+    | `Top -> fvs
+    | `And (l, r) -> ftv_c (ftv_c fvs l) r
+    | `Eq (l, r) -> ftv (ftv fvs l) r
+    | `Ind (l, r) -> ftv (ftv fvs l) r
+    | `Call (t, ts, s) -> ftv (List.fold_left ftv (ftv fvs t) ts) s
+    | `Match (t, ps) -> List.fold_left ftv_p (ftv fvs t) ps
+    | `Sexp (_, t, ts) -> List.fold_left ftv (ftv fvs t) ts
 
     let ftv_context ctx = Context.fold (fun _ t fvs -> ftv fvs t) ctx IS.empty
 
     (* substitution *)
 
-    let rec subst_t f bvs = function
-    | Name x as t when IS.mem x bvs -> t
-    | Name x -> f x
-    | Int -> Int
-    | String -> String
-    | Arrow (xs, c, ts, t) ->
+    let rec subst_t f bvs : t -> t = function
+    | `Name x as t when IS.mem x bvs -> t
+    | `Name x -> f x
+    | `Int -> `Int
+    | `String -> `String
+    | `Arrow (xs, c, ts, t) ->
         let bvs = IS.union bvs xs in
-        Arrow (xs, subst_c f bvs c, List.map (subst_t f bvs) ts, subst_t f bvs t)
-    | Array t -> Array (subst_t f bvs t)
-    | Sexp xs -> Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
+        `Arrow (xs, subst_c f bvs c, List.map (subst_t f bvs) ts, subst_t f bvs t)
+    | `Array t -> `Array (subst_t f bvs t)
+    | `Sexp xs -> `Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
 
-    and subst_c f bvs = function
-    | Top -> Top
-    | And (l, r) -> And (subst_c f bvs l, subst_c f bvs r)
-    | Eq (l, r) -> Eq (subst_t f bvs l, subst_t f bvs r)
-    | Box t -> Box (subst_t f bvs t)
-    | Fun t -> Fun (subst_t f bvs t)
-    | Ind (l, r) -> Ind (subst_t f bvs l, subst_t f bvs r)
-    | IndI (i, l, r) -> IndI (i, subst_t f bvs l, subst_t f bvs r)
-    | SexpC t -> SexpC (subst_t f bvs t)
-    | SexpX (x, t, ts) -> SexpX (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
-    | Call (t, ss, s) -> Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
+    and subst_p f bvs : p -> p = function
+    | `Wildcard -> `Wildcard
+    | `Typed (t, p) -> `Typed (subst_t f bvs t, subst_p f bvs p)
+    | `Array ps -> `Array (List.map (subst_p f bvs) ps)
+    | `Sexp (x, ps) -> `Sexp (x, List.map (subst_p f bvs) ps)
+    | `Boxed -> `Boxed
+    | `Unboxed -> `Unboxed
+    | `StringTag -> `StringTag
+    | `ArrayTag -> `ArrayTag
+    | `SexpTag -> `SexpTag
+    | `FunTag -> `FunTag
 
-    let subst_map_to_fun s x = Option.value (Subst.find_opt x s) ~default:(Name x)
+    and subst_c f bvs : c -> c = function
+    | `Top -> `Top
+    | `And (l, r) -> `And (subst_c f bvs l, subst_c f bvs r)
+    | `Eq (l, r) -> `Eq (subst_t f bvs l, subst_t f bvs r)
+    | `Ind (l, r) -> `Ind (subst_t f bvs l, subst_t f bvs r)
+    | `Call (t, ss, s) -> `Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
+    | `Match (t, ps) -> `Match (subst_t f bvs t, List.map (subst_p f bvs) ps)
+    | `Sexp (x, t, ts) -> `Sexp (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
+
+    let subst_map_to_fun s x = Option.value (Subst.find_opt x s) ~default:(`Name x)
 
     (* list of constraints without And and Top *)
 
     let list_c =
         let rec list_c acc = function
-        | Top -> acc
-        | And (l, r) -> list_c (list_c acc l) r
+        | `Top -> acc
+        | `And (l, r) -> list_c (list_c acc l) r
         | c -> c :: acc
         in list_c []
 
     (* constraint built from list *)
 
     let c_list = function
-    | [] -> Top
+    | [] -> `Top
     (* NB: rope-like structure with "lightweight" left branch, important for solver *)
-    | c :: cs -> List.fold_left (fun acc c -> And (c, acc)) c cs
+    | c :: cs -> List.fold_left (fun acc c -> `And (c, acc)) c cs
 
     (* solve syntax equality constraints using Robinson's alogrithm *)
 
     let unify =
-        let rec u = function
-        | (Name x, Name y) ->
+        let rec u : t * t -> _ = function
+        | (`Name x, `Name y) ->
             if x == y
             then Subst.empty
             else if x < y
-                then Subst.singleton y @@ Name x
-                else Subst.singleton x @@ Name y
-        | (Name x, t) ->
+                then Subst.singleton y @@ `Name x
+                else Subst.singleton x @@ `Name y
+        | (`Name x, t) ->
             if IS.mem x @@ ftv IS.empty t
             then failwith "recursive equation" (* TODO *)
             else Subst.singleton x t
-        | (t, (Name _ as t')) -> u (t', t)
-        | (Int, Int) -> Subst.empty
-        | (String, String) -> Subst.empty
-        | (Arrow _, Arrow _) -> failwith "arrows equality occurred" (* TODO *)
-        | (Array t1, Array t2) -> u (t1, t2)
-        | (Sexp _, Sexp _) -> failwith "sexp equality occurred" (* TODO *)
+        | (t, (`Name _ as t')) -> u (t', t)
+        | (`Int, `Int) -> Subst.empty
+        | (`String, `String) -> Subst.empty
+        | (`Arrow _, `Arrow _) -> failwith "arrows equality occurred" (* TODO *)
+        | (`Array t1, `Array t2) -> u (t1, t2)
+        | (`Sexp _, `Sexp _) -> failwith "sexp equality occurred" (* TODO *)
         | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
         in
 
         let f (s, res) = function
-        | Top -> failwith "ill-formed constraint list (Top)"
-        | And _ -> failwith "ill-formed constraint list (And)"
-        | Eq (l, r) ->
+        | `Top -> failwith "ill-formed constraint list (Top)"
+        | `And _ -> failwith "ill-formed constraint list (And)"
+        | `Eq (l, r) ->
             let sf = subst_map_to_fun s in
             let l = subst_t sf IS.empty l in
             let r = subst_t sf IS.empty r in
@@ -296,7 +274,7 @@ module Type = struct
     (* trivial simplifier *)
     (* TODO simplify better *)
 
-    let simplify c =
+    let simplify (c : c) : c * t Subst.t =
         let c = list_c c in
         let s, c = unify c in
         subst_c (subst_map_to_fun s) IS.empty (c_list c), s
@@ -316,7 +294,7 @@ module Type = struct
      *              free constraints.
      *)
 
-    let split_c bvs fvs c =
+    let split_c bvs fvs (c : c) =
         let bvs = IS.diff bvs fvs in
         let c = List.map (fun c -> c, IS.diff (ftv_c IS.empty c) fvs) @@ list_c c in
 
@@ -382,71 +360,68 @@ module Type = struct
         let new_tv () =
             let idx = !prev_tv_idx + 1 in
             prev_tv_idx := idx ;
-            Name idx
+            `Name idx
         in
 
-        let rec infer_pattern t = function
-        | Pattern.Named (_, p) -> infer_pattern t p
-        | Pattern.Wildcard -> Top, t
+        let rec infer_p ctx : Pattern.t -> p * t Context.t = function
+        | Pattern.Wildcard -> `Wildcard, ctx
+        | Pattern.Named (x, p) ->
+            let t = new_tv () in
+            let ctx = Context.add x t ctx in
+            let p, ctx = infer_p ctx p in
+            `Typed (t, p), ctx
         | Pattern.Array ps ->
-            let t1, s = new_tv (), new_tv () in
-            let css = List.map (infer_pattern @@ Array t1) ps in
-            let c = List.fold_left (fun c (c', s') -> And (c, And (Eq (s, s'), c'))) Top css in
-            c, Array s
+            let ps, ctx = infer_ps ctx ps in
+            `Array ps, ctx
         | Pattern.Sexp (x, ps) ->
-            let ts = List.init (List.length ps) (fun _ -> new_tv ()) in
-            let css = List.map2 infer_pattern ts ps in
-            let c = List.fold_left (fun c (c', _) -> And (c, c')) Top css in
-            And (SexpX (x, t, ts), c), Sexp [x, List.map snd css]
-        | Pattern.Const _ -> Eq (t, Int), Int
-        | Pattern.String _ -> Eq (t, String), String
-        | Pattern.Boxed -> Box t, t
-        | Pattern.UnBoxed -> Eq (t, Int), Int
-        | Pattern.StringTag -> Eq (t, String), String
-        | Pattern.ArrayTag ->
-            let t1 = new_tv () in
-            Eq (t, Array t1), Array t1
-        | Pattern.SexpTag -> SexpC t, t
-        | Pattern.ClosureTag -> Fun t, t
+            let ps, ctx = infer_ps ctx ps in
+            `Sexp (x, ps), ctx
+        | Pattern.Const _ -> `Unboxed, ctx
+        | Pattern.String _ -> `StringTag, ctx
+        | Pattern.Boxed -> `Boxed, ctx
+        | Pattern.UnBoxed -> `Unboxed, ctx
+        | Pattern.StringTag -> `StringTag, ctx
+        | Pattern.ArrayTag -> `ArrayTag, ctx
+        | Pattern.SexpTag -> `SexpTag, ctx
+        | Pattern.ClosureTag -> `FunTag, ctx
+
+        and infer_ps ctx ps = List.fold_left (fun (ps, ctx) p ->
+            let p, ctx = infer_p ctx p in p::ps, ctx) ([], ctx) ps
         in
 
-        let rec infer ctx = function
+        let rec infer ctx : E.t -> c * t = function
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
             let c2, t = infer ctx e in
             (* TODO apply fixpoint on mutually recursive definitions *)
-            And (c1, c2), t
+            `And (c1, c2), t
         | E.Seq (l, r) ->
             let c1, _ = infer ctx l in
             let c2, t = infer ctx r in
-            And (c1, c2), t
+            `And (c1, c2), t
         | E.Assign (l, r) ->
             let c1, t = infer ctx l in
             let c2, t' = infer ctx r in
-            And (c1, And (c2, Eq (t, t'))), t
+            `And (c1, `And (c2, `Eq (t, t'))), t
         | E.Binop (l, r) ->
             let c1, t1 = infer ctx l in
             let c2, t2 = infer ctx r in
-            And (c1, And (c2, And (Eq (t1, Int), Eq (t2, Int)))), Int
+            `And (c1, `And (c2, `And (`Eq (t1, `Int), `Eq (t2, `Int)))), `Int
         | E.Call (f, xs) ->
             let c, t = infer ctx f in
             let cts = List.map (infer ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> And (c, c')) c cts in
+            let c = List.fold_left (fun c (c', _) -> `And (c, c')) c cts in
             let s = new_tv () in
-            And (c, Call (t, List.map snd cts, s)), s
-        | E.Subscript (x, E.Int i) ->
-            let c, t = infer ctx x in
-            let s = new_tv () in
-            And (c, IndI (i, t, s)), s
+            `And (c, `Call (t, List.map snd cts, s)), s
         | E.Subscript (x, i) ->
             let c1, t1 = infer ctx x in
             let c2, t2 = infer ctx i in
             let s = new_tv () in
-            And (c1, And (c2, And (Eq (t2, Int), Ind (t1, s)))), s
-        | E.Name x -> Top, Context.find x ctx
-        | E.Int 0 -> Top, new_tv ()
-        | E.Int _ -> Top, Int
-        | E.String _ -> Top, String
+            `And (c1, `And (c2, `And (`Eq (t2, `Int), `Ind (t1, s)))), s
+        | E.Name x -> `Top, Context.find x ctx
+        | E.Int 0 -> `Top, new_tv ()
+        | E.Int _ -> `Top, `Int
+        | E.String _ -> `Top, `String
         | E.Lambda (xs, b) ->
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
@@ -470,60 +445,60 @@ module Type = struct
 
             let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
             let (bvs, bc, fc) = split_c signature_tvs fvs c in
-            fc, Arrow (bvs, bc, ts, t)
-        | E.Skip -> Top, new_tv ()
+            fc, `Arrow (bvs, bc, ts, t)
+        | E.Skip -> `Top, new_tv ()
         | E.Array xs ->
             let css = List.map (infer ctx) xs in
             let t = new_tv () in
-            let c = List.fold_left (fun c (c', s) -> And (c, And (Eq (t, s), c'))) Top css in
-            c, Array t
+            let c = List.fold_left (fun c (c', s) -> `And (c, `And (`Eq (t, s), c'))) `Top css in
+            c, `Array t
         | E.Sexp (x, xs) ->
             let css = List.map (infer ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> And (c, c')) Top css in
+            let c = List.fold_left (fun c (c', _) -> `And (c, c')) `Top css in
             let t = new_tv () in
-            And (c, SexpX (x, t, List.map snd css)), t
+            `And (c, `Sexp (x, t, List.map snd css)), t
         | E.If (c, t, f) ->
             let c1, _ = infer ctx c in
             let c2, t = infer ctx t in
             let c3, t' = infer ctx f in
-            And (c1, And (c2, And (c3, Eq (t, t')))), t
+            `And (c1, `And (c2, `And (c3, `Eq (t, t')))), t
         | E.While (c, b) ->
             let c1, _ = infer ctx c in
             let c2, _ = infer ctx b in
-            And (c1, c2), new_tv ()
+            `And (c1, c2), new_tv ()
         | E.DoWhile (b, c) ->
             let c1, _ = infer ctx b in
             let c2, _ = infer ctx c in
-            And (c1, c2), new_tv ()
-        | E.Case (E.Name x as x', bs) ->
-            let c, t = infer ctx x' in
+            `And (c1, c2), new_tv ()
+        | E.Case (x, bs) ->
+            let c, t = infer ctx x in
             let s = new_tv () in
 
-            let f c (p, b) =
-                let c1, t' = infer_pattern t p in
-                let c2, s' = infer (Context.add x t' ctx) b in
-                And (c, And (c1, And (Eq (s, s'), c2)))
+            let f (c, ps) (p, b) =
+                let p, ctx = infer_p ctx p in
+                let c', s' = infer ctx b in
+                `And (c, `And (c', `Eq (s, s'))), p::ps
             in
 
-            List.fold_left f c bs, s
-        | E.Case _ -> invalid_arg "Case of complex term"
+            let c, ps = List.fold_left f (c, []) bs in
+            `And (c, `Match (t, ps)), s
 
         and infer_decl ctx = function
         | E.Var (x, v) ->
             let c, t = infer ctx v in
-            And (c, Eq (Context.find x ctx, t))
+            `And (c, `Eq (Context.find x ctx, t))
         | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
 
         and infer_decls ctx ds =
             let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
             let ctx = List.fold_left f ctx ds in
 
-            List.fold_left (fun c d -> And (c, infer_decl ctx d)) Top ds, ctx
+            List.fold_left (fun c d -> `And (c, infer_decl ctx d)) `Top ds, ctx
         in
 
         object
 
-            method pattern = infer_pattern
+            method pattern = infer_p
             method term = infer
 
             method decl = infer_decl

@@ -9,7 +9,7 @@ let i2 = !!2
 
 let sA = !!"A"
 
-let make_goal ts = ocanren { fresh t in ts == [t] & CTop //- CSexpX (sA, t, [t]) }
+let make_goal ts = ocanren { fresh t in ts == [t] & CTop //- CSexp (sA, t, [t]) }
 
 (*
 let make_goal c' = ocanren

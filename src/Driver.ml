@@ -204,30 +204,29 @@ let[@ocaml.warning "-32"] main =
             let module S = Solver in
 
             let prog' = T.Expr.from_language @@ snd prog in
-            let prog' = T.Expr.case_of_variable_pass prog' in
 
             print_endline @@ T.Expr.show_t prog' ;
 
-            let ctx = T.Type.Context.of_seq @@ List.to_seq
-                [ "read", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [], T.Type.Int)
-                ; "write", T.Type.Arrow (T.Type.IS.empty, T.Type.Top, [T.Type.Int], T.Type.Int)
-                ; "length", T.Type.Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [0]
-                    , T.Type.Box (T.Type.Name 0)
-                    , [T.Type.Name 0]
-                    , T.Type.Int
+            let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
+                [ "read", `Arrow (T.Type.IS.empty, `Top, [], `Int)
+                ; "write", `Arrow (T.Type.IS.empty, `Top, [`Int], `Int)
+                ; "length", `Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [1]
+                    , `Match (`Name 1, [`Boxed])
+                    , [`Name 1]
+                    , `Int
                     )
-                ; "string", T.Type.Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [0]
-                    , T.Type.Top
-                    , [T.Type.Name 0]
-                    , T.Type.String
+                ; "string", `Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [1]
+                    , `Top
+                    , [`Name 1]
+                    , `String
                     )
-                ; "fix", T.Type.Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [0; 1]
-                    , T.Type.Call (T.Type.Name 0, [T.Type.Name 1], T.Type.Name 1)
-                    , [T.Type.Name 0]
-                    , T.Type.Name 1
+                ; "fix", `Arrow
+                    ( T.Type.IS.of_seq @@ List.to_seq [1; 2]
+                    , `Call (`Name 1, [`Name 2], `Name 2)
+                    , [`Name 1]
+                    , `Name 2
                     )
                 ] in
 
@@ -253,7 +252,7 @@ let[@ocaml.warning "-32"] main =
             ) subst "" ^ " }";
 
             let subst v = match S.Subst.find_opt v subst with
-            | None -> Printf.printf "variable %d wasn't solved!\n" v ; T.Type.Name v
+            | None -> Printf.printf "variable %d wasn't solved!\n" v ; `Name v
             | Some t -> t
             in
 
