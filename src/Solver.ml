@@ -11,9 +11,9 @@ open OCanren.Std
 | TName of 'var
 | TInt
 | TString
-| TArrow of 'var_list * 'c * 't_list * 't
 | TArray of 't
 | TSexp of 'sexp
+| TArrow of 'var_list * 'c * 't_list * 't
 with show, compare, foldl, gmap
 
 @type ('t, 'p, 'p_list, 'str) lama_p =
@@ -111,9 +111,9 @@ and injected_lama_c =
 let tName x = OCanren.inj (TName x)
 let tInt () = OCanren.inj TInt
 let tString () = OCanren.inj TString
-let tArrow xs c ts t = OCanren.inj (TArrow (xs, c, ts, t))
 let tArray t = OCanren.inj (TArray t)
 let tSexp xs = OCanren.inj (TSexp xs)
+let tArrow xs c ts t = OCanren.inj (TArrow (xs, c, ts, t))
 
 let pWildcard () = OCanren.inj PWildcard
 let pTyped t p = OCanren.inj (PTyped (t, p))
@@ -282,14 +282,6 @@ and logic_lama_c_to_ground : logic_lama_c -> ground_lama_c = function
     (logic_list_to_ground logic_lama_p_to_ground)
     x
 
-(* xs[i] = x *)
-let rec list_index (i : Nat.injected) (xs : 'a List.injected) (x : 'a) = ocanren
-    { fresh x', xs' in xs == x' :: xs' &
-        { i == 0 & x == x'
-        | fresh i' in i == Nat.s i' & list_index i' xs' x
-        }
-    }
-
 (* res <=> exists i. xs[i] = x *)
 let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanren
     { xs == [] & res == false
@@ -297,6 +289,23 @@ let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanr
         { res == true & x == x'
         | x =/= x' & list_member x xs' res
         }
+    }
+
+(* partition list [(k, v)] on [v] and [(k', v)], k =/= k' *)
+let rec partition k kvs vs1 kvs2 = ocanren
+    { kvs == [] & vs1 == [] & kvs2 == []
+    | fresh k', v, kvs' in kvs == (k', v) :: kvs' &
+        { k == k' & { fresh vs1' in vs1 == v :: vs1' & partition k kvs' vs1' kvs2 }
+        | k =/= k' & { fresh kvs2' in kvs2 == (k', v) :: kvs2' & partition k kvs' vs1 kvs2' }
+        }
+    }
+
+(* [(k, v)] -> [(k, [v])], k distinct *)
+let rec group_by_fst kvs res = ocanren
+    { kvs == [] & res == []
+    | fresh k, v, vs, kvs', kvs'', res' in kvs == (k, v) :: kvs'
+        & res == (k, vs) :: res' & partition k kvs vs kvs''
+        & group_by_fst kvs'' res'
     }
 
 let rec subst_v x s t = ocanren
@@ -330,6 +339,8 @@ let rec subst_t s t t' =
     { { fresh x in t == TName x & subst_v x s t' }
     | t == TInt & t' == TInt
     | t == TString & t' == TString
+    | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
+    | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
     | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
         & t' == TArrow (fxs, fc', fts', ft')
         & filter_subst fxs s s'
@@ -337,14 +348,27 @@ let rec subst_t s t t' =
         & List.mapo (subst_t s') fts fts'
         & subst_t s' ft ft'
         }
-    | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
-    | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
     }
 
 and subst_sexp s xts xts' = ocanren
     { fresh x, ts, ts' in xts == (x, ts)
         & xts' == (x, ts')
         & List.mapo (subst_t s) ts ts'
+    }
+
+and subst_p s p p' = ocanren
+    { p == PWildcard & p' == PWildcard
+    | { fresh t, p1, t', p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
+        & subst_t s t t' & subst_p s p1 p1' }
+    | { fresh ps, ps' in p == PArray ps & p' == PArray ps' & List.mapo (subst_p s) ps ps' }
+    | { fresh x, ps, ps' in p == PSexp (x, ps) & p' == PSexp (x, ps')
+        & List.mapo (subst_p s) ps ps' }
+    | p == PBoxed & p' == PBoxed
+    | p == PUnboxed & p' == PUnboxed
+    | p == PStringTag & p' == PStringTag
+    | p == PArrayTag & p' == PArrayTag
+    | p == PSexpTag & p' == PSexpTag
+    | p == PFunTag & p' == PFunTag
     }
 
 and subst_c s c c' = ocanren
@@ -361,13 +385,17 @@ and subst_c s c c' = ocanren
         & c' == CInd (t1', t2')
         & subst_t s t1 t1'
         & subst_t s t2 t2' }
-    | { fresh x', t, ts, t', ts' in c == CSexp (x', t, ts)
-        & c' == CSexp (x', t', ts')
-        & subst_t s t t'
-        & List.mapo (subst_t s) ts ts' }
     | { fresh f, ts, t, f', ts', t' in c == CCall (f, ts, t)
         & c' == CCall (f', ts', t')
         & subst_t s f f'
+        & subst_t s t t'
+        & List.mapo (subst_t s) ts ts' }
+    | { fresh t, ps, t', ps' in c == CMatch (t, ps)
+        & c' == CMatch (t', ps')
+        & subst_t s t t'
+        & List.mapo (subst_p s) ps ps' }
+    | { fresh x', t, ts, t', ts' in c == CSexp (x', t, ts)
+        & c' == CSexp (x', t', ts')
         & subst_t s t t'
         & List.mapo (subst_t s) ts ts' }
     }
@@ -377,6 +405,104 @@ let rec make_subst xs res = ocanren
     | fresh x, s, xs', res' in xs == x :: xs'
         & res == (x, s) :: res'
         & make_subst xs' res'
+    }
+
+type match_t_res =
+    ( (injected_lama_t, injected_lama_p) Pair.injected List.injected
+    , (injected_lama_t, injected_lama_t) Pair.injected List.injected
+    ) Pair.injected
+
+let rec match_t t p (res : match_t_res Option.groundi) =
+    let some = Option.some in
+    let none = Option.none in
+
+    let rec array_hlp t ps res = ocanren
+        { ps == [] & res == []
+        | fresh p, ps', res' in ps == p :: ps' & res == (t, p) :: res' & array_hlp t ps' res'
+        }
+    in
+
+    let rec sexp_hlp ts ps res = ocanren
+        { ps == [] &
+            { ts == [] & res == Some []
+            | ts =/= [] & res == None
+            }
+        | fresh p, ps', t, ts', res', tps in ps == p :: ps' &
+            { ts == [] & res == None
+            | ts == t :: ts' & sexp_hlp ts' ps' res' &
+                { res' == None & res == None
+                | res' == Some tps & res == Some ((t, p) :: tps)
+                }
+            }
+        }
+    in
+
+    (*
+    debug_var t (Fun.flip reify_lama_t) (fun ts ->
+        debug_var p (Fun.flip reify_lama_p) (fun ps ->
+            Printf.printf "matchT(%s, %s)"
+                (GT.show GT.list (GT.show logic_lama_t) ts)
+                (GT.show GT.list (GT.show logic_lama_p) ps)
+                ;
+            print_newline () ;
+            success)) &&&
+    *)
+
+    (* FIXME no =/= with fresh unbound variables *)
+
+    ocanren
+    { p == PWildcard & res == some ([], []) (* MT-Wildcard *)
+    | { fresh s, p', res' in p == PTyped s p' & match_t t p' res' &
+        { res' == None & res == None
+        | fresh ps, eqs in res' == some (ps, eqs) & res == some (ps, (t, s) :: eqs)
+        } } (* MT-Typed *)
+    | { fresh t', ps, ps' in p == PArray ps &
+        { t == TArray t' & res == some (ps', []) & array_hlp t' ps ps'
+        | t =/= TArray t' & res == None
+        } } (* MT-Array *)
+    | { fresh x, ps, ts, res', tps in p == PSexp (x, ps) &
+        { t == TSexp [(x, ts)] & sexp_hlp ts ps res' &
+            { res' == None & res == None
+            | res' == Some tps & res == some (tps, [])
+            }
+        | t =/= TSexp [(x, ts)] & res == None
+        } } (* MT-Sexp *)
+    | p == PBoxed &
+        { t == TString & res == some ([], [])
+        | t =/= TString & res == None
+        } (* MT-BoxString *)
+    | { fresh t' in p == PBoxed &
+        { t == TArray t' & res == some ([], [])
+        | t =/= TArray t' & res == None
+        } } (* MT-BoxArray *)
+    | { fresh xts in p == PBoxed &
+        { t == TSexp [xts] & res == some ([], [])
+        | t =/= TSexp [xts] & res == None
+        } } (* MT-BoxSexp *)
+    | { fresh fxs, fc, fts, ft in p == PBoxed &
+        { t == TArrow (fxs, fc, fts, ft) & res == some ([], [])
+        | t =/= TArrow (fxs, fc, fts, ft) & res == None
+        } } (* MT-BoxArrow *)
+    | p == PUnboxed &
+        { t == TInt & res == some ([], [])
+        | t =/= TInt & res == None
+        } (* MT-IntShape *)
+    | p == PStringTag &
+        { t == TString & res == some ([], [])
+        | t =/= TString & res == None
+        } (* MT-StringShape *)
+    | { fresh t' in p == PArrayTag &
+        { t == TArray t' & res == some ([], [])
+        | t =/= TArray t' & res == None
+        } } (* MT-ArrayShape *)
+    | { fresh xts in p == PSexpTag &
+        { t == TSexp [xts] & res == some ([], [])
+        | t =/= TSexp [xts] & res == None
+        } } (* MT-SexpShape *)
+    | { fresh fxs, fc, fts, ft in p == PFunTag &
+        { t == TArrow (fxs, fc, fts, ft) & res == some ([], [])
+        | t =/= TArrow (fxs, fc, fts, ft) & res == None
+        } } (* MT-FunShape *)
     }
 
 let ind_sexp_hlp xs (t : injected_lama_t) : goal =
@@ -389,17 +515,6 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
         fresh x, ts, ts' in xts == (x, ts)
         & List.mapo f' ts ts'
         & List.allo ts' res
-    } in
-
-    ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
-
-let ind_i_sexp_hlp (i : Nat.injected) xs (t : injected_lama_t) : goal =
-    let f xts res : goal = ocanren {
-        fresh x, ts, t' in xts == (x, ts) &
-            { res == false & t =/= t'
-            | res == true & t == t'
-            } &
-            list_index i ts t'
     } in
 
     ocanren { fresh xs' in List.mapo f xs xs' & List.allo xs' true }
@@ -478,10 +593,12 @@ let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goa
     ocanren { fresh n in List.lengtho ts n & g n xs }
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
+    (*
     debug_var c' (Fun.flip reify_lama_c) (fun c's ->
         Printf.printf "||- %s" (GT.show GT.list (GT.show logic_lama_c) c's) ;
         print_newline () ;
         success) &&&
+    *)
     ocanren
     { c == c' (* C-Refl *)
     | c' == CTop (* C-Top *)
@@ -492,11 +609,69 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | c' == CInd (TString, TInt) (* C-IndString *)
     | { fresh t in c' == CInd (TArray t, t) } (* C-IndArray *)
     | { fresh xs, t in c' == CInd (TSexp xs, t) & ind_sexp_hlp xs t } (* C-IndSexp *)
-    | { fresh x, xs, ts in c' == CSexp (x, TSexp xs, ts) & sexp_x_hlp x xs ts } (* C-Sexp *)
     | { fresh fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (TArrow (fxs, fc, fts, ft), ts, t)
         & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
         & c //- fc' } (* C-Call *)
+    | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
+    | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
+    | { fresh t, ps in c' == CMatch (TArray t, ps) & match_t_ast c (TArray t) ps } (* C-MatchArray *)
+    | { fresh xs, ps in c' == CMatch (TSexp xs, ps) & match_sexp_hlp c xs ps } (* C-MatchSexp *)
+    | { fresh fxs, fc, fts, ft, ps in c' == CMatch (TArrow (fxs, fc, fts, ft), ps)
+        & match_t_ast c (TArrow (fxs, fc, fts, ft)) ps } (* C-MatchFun *)
+    | { fresh x, xs, ts in c' == CSexp (x, TSexp xs, ts) & sexp_x_hlp x xs ts } (* C-Sexp *)
     }
+
+and match_sexp_hlp c xs ps = ocanren
+    { xs == []
+    | fresh xts, xs' in xs == xts :: xs'
+        & match_t_ast c (TSexp [xts]) ps
+        & match_sexp_hlp c xs' ps
+    }
+
+and match_t_ast c t ps =
+    let some = Option.some in
+    let none = Option.none in
+    let o () = Nat.o in
+    let s = Nat.s in
+
+    let rec eqs_hlp eqs = ocanren
+        { eqs == []
+        | fresh t1, t2, eqs' in eqs == (t1, t2) :: eqs' & t1 == t2 & eqs_hlp eqs'
+        }
+    in
+
+    let rec match_hlp ps num tps = ocanren
+        { ps == [] & num == O & tps == []
+        | fresh p, ps', res in ps == p :: ps' & match_t t p res &
+            { res == None & match_hlp ps' num tps
+            | fresh tps', tps'', num', eqs in res == some (tps', eqs)
+                & num == S num' & eqs_hlp eqs & List.appendo tps' tps'' tps
+                & match_hlp ps' num' tps''
+            }
+        }
+    in
+
+    let rec match_c_hlp tps = ocanren
+        { tps == []
+        | fresh t, ps, tps' in tps == (t, ps) :: tps' & c //- CMatch (t, ps) & match_c_hlp tps'
+        }
+    in
+
+    (*
+    debug_var c (Fun.flip reify_lama_c) (fun cs ->
+        debug_var t (Fun.flip reify_lama_t) (fun ts ->
+            debug_var ps (Fun.flip (List.reify reify_lama_p)) (fun pss ->
+                Printf.printf "%s |- matchT*(%s, %s)"
+                    (GT.show GT.list (GT.show logic_lama_c) cs)
+                    (GT.show GT.list (GT.show logic_lama_t) ts)
+                    (GT.show GT.list (GT.show List.logic (GT.show logic_lama_p)) pss)
+                    ;
+                print_newline () ;
+                success))) &&&
+    *)
+
+    ocanren { fresh num, tps, tps' in match_hlp ps num tps & num =/= O
+        & group_by_fst tps tps' & match_c_hlp tps' } (* MT-Ast *)
 
 
 (* Continuation-passing style monad *)

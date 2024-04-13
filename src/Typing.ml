@@ -385,8 +385,10 @@ module Type = struct
         | Pattern.SexpTag -> `SexpTag, ctx
         | Pattern.ClosureTag -> `FunTag, ctx
 
-        and infer_ps ctx ps = List.fold_left (fun (ps, ctx) p ->
-            let p, ctx = infer_p ctx p in p::ps, ctx) ([], ctx) ps
+        and infer_ps ctx ps =
+            let ps, ctx = List.fold_left (fun (ps, ctx) p ->
+                let p, ctx = infer_p ctx p in p::ps, ctx) ([], ctx) ps in
+            List.rev ps, ctx
         in
 
         let rec infer ctx : E.t -> c * t = function
@@ -481,7 +483,7 @@ module Type = struct
             in
 
             let c, ps = List.fold_left f (c, []) bs in
-            `And (c, `Match (t, ps)), s
+            `And (c, `Match (t, List.rev ps)), s
 
         and infer_decl ctx = function
         | E.Var (x, v) ->
