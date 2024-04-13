@@ -241,9 +241,9 @@ let reify_lama_p = reify_lama_p reify_lama_t
 let reify_lama_c = reify_lama_c reify_lama_t
 
 let rec logic_list_to_ground (f : 'a -> 'b) : 'a List.logic -> 'b List.ground = function
-| Var _ -> List.Nil
-| Value List.Nil -> List.Nil
-| Value (List.Cons (x, xs)) -> List.Cons (f x, logic_list_to_ground f xs)
+| Var _ -> []
+| Value List.Nil -> []
+| Value (List.Cons (x, xs)) -> f x :: logic_list_to_ground f xs
 
 let rec logic_lama_t_to_ground : logic_lama_t -> ground_lama_t = function
 | Var (i, _) -> TName i
@@ -414,7 +414,6 @@ type match_t_res =
 
 let rec match_t t p (res : match_t_res Option.groundi) =
     let some = Option.some in
-    let none = Option.none in
 
     let rec array_hlp t ps res = ocanren
         { ps == [] & res == []
@@ -448,40 +447,38 @@ let rec match_t t p (res : match_t_res Option.groundi) =
             success)) &&&
     *)
 
-    (* FIXME no =/= with fresh unbound variables *)
-
     ocanren
     { p == PWildcard & res == some ([], []) (* MT-Wildcard *)
-    | { fresh s, p', res' in p == PTyped s p' & match_t t p' res' &
+    | { fresh s, p', res' in p == PTyped (s, p') & match_t t p' res' &
         { res' == None & res == None
         | fresh ps, eqs in res' == some (ps, eqs) & res == some (ps, (t, s) :: eqs)
         } } (* MT-Typed *)
-    | { fresh t', ps, ps' in p == PArray ps &
-        { t == TArray t' & res == some (ps', []) & array_hlp t' ps ps'
-        | t =/= TArray t' & res == None
+    | { fresh t', ps, tps in p == PArray ps &
+        { t == TArray t' & res == some (tps, []) & array_hlp t' ps tps
+        | t =/= TArray _ & res == None
         } } (* MT-Array *)
     | { fresh x, ps, ts, res', tps in p == PSexp (x, ps) &
         { t == TSexp [(x, ts)] & sexp_hlp ts ps res' &
             { res' == None & res == None
             | res' == Some tps & res == some (tps, [])
             }
-        | t =/= TSexp [(x, ts)] & res == None
+        | t =/= TSexp [(x, _)] & res == None
         } } (* MT-Sexp *)
     | p == PBoxed &
         { t == TString & res == some ([], [])
         | t =/= TString & res == None
         } (* MT-BoxString *)
-    | { fresh t' in p == PBoxed &
-        { t == TArray t' & res == some ([], [])
-        | t =/= TArray t' & res == None
-        } } (* MT-BoxArray *)
-    | { fresh xts in p == PBoxed &
-        { t == TSexp [xts] & res == some ([], [])
-        | t =/= TSexp [xts] & res == None
-        } } (* MT-BoxSexp *)
+    | p == PBoxed &
+        { t == TArray _ & res == some ([], [])
+        | t =/= TArray _ & res == None
+        } (* MT-BoxArray *)
+    | p == PBoxed &
+        { t == TSexp [_] & res == some ([], [])
+        | t =/= TSexp [_] & res == None
+        } (* MT-BoxSexp *)
     | { fresh fxs, fc, fts, ft in p == PBoxed &
         { t == TArrow (fxs, fc, fts, ft) & res == some ([], [])
-        | t =/= TArrow (fxs, fc, fts, ft) & res == None
+        | t =/= TArrow (_, _, _, _) & res == None
         } } (* MT-BoxArrow *)
     | p == PUnboxed &
         { t == TInt & res == some ([], [])
@@ -491,18 +488,18 @@ let rec match_t t p (res : match_t_res Option.groundi) =
         { t == TString & res == some ([], [])
         | t =/= TString & res == None
         } (* MT-StringShape *)
-    | { fresh t' in p == PArrayTag &
-        { t == TArray t' & res == some ([], [])
-        | t =/= TArray t' & res == None
-        } } (* MT-ArrayShape *)
-    | { fresh xts in p == PSexpTag &
-        { t == TSexp [xts] & res == some ([], [])
-        | t =/= TSexp [xts] & res == None
-        } } (* MT-SexpShape *)
-    | { fresh fxs, fc, fts, ft in p == PFunTag &
-        { t == TArrow (fxs, fc, fts, ft) & res == some ([], [])
-        | t =/= TArrow (fxs, fc, fts, ft) & res == None
-        } } (* MT-FunShape *)
+    | p == PArrayTag &
+        { t == TArray _ & res == some ([], [])
+        | t =/= TArray _ & res == None
+        } (* MT-ArrayShape *)
+    | p == PSexpTag &
+        { t == TSexp [_] & res == some ([], [])
+        | t =/= TSexp [_] & res == None
+        } (* MT-SexpShape *)
+    | p == PFunTag &
+        { t == TArrow (_, _, _, _) & res == some ([], [])
+        | t =/= TArrow (_, _, _, _) & res == None
+        } (* MT-FunShape *)
     }
 
 let ind_sexp_hlp xs (t : injected_lama_t) : goal =
@@ -630,8 +627,7 @@ and match_sexp_hlp c xs ps = ocanren
 
 and match_t_ast c t ps =
     let some = Option.some in
-    let none = Option.none in
-    let o () = Nat.o in
+    let o = Nat.o in
     let s = Nat.s in
 
     let rec eqs_hlp eqs = ocanren
@@ -641,11 +637,11 @@ and match_t_ast c t ps =
     in
 
     let rec match_hlp ps num tps = ocanren
-        { ps == [] & num == O & tps == []
+        { ps == [] & num == o & tps == []
         | fresh p, ps', res in ps == p :: ps' & match_t t p res &
             { res == None & match_hlp ps' num tps
             | fresh tps', tps'', num', eqs in res == some (tps', eqs)
-                & num == S num' & eqs_hlp eqs & List.appendo tps' tps'' tps
+                & num == s num' & eqs_hlp eqs & List.appendo tps' tps'' tps
                 & match_hlp ps' num' tps''
             }
         }
@@ -670,7 +666,7 @@ and match_t_ast c t ps =
                 success))) &&&
     *)
 
-    ocanren { fresh num, tps, tps' in match_hlp ps num tps & num =/= O
+    ocanren { fresh num, tps, tps' in match_hlp ps num tps & num =/= o
         & group_by_fst tps tps' & match_c_hlp tps' } (* MT-Ast *)
 
 
@@ -697,19 +693,19 @@ let rec project_t : ground_lama_t -> TT.t = function
 | TInt -> `Int
 | TString -> `String
 | TArrow (xs, c, ts, t) -> `Arrow
-    ( TT.IS.of_seq @@ OrigList.to_seq @@ List.to_list Fun.id xs
+    ( TT.IS.of_seq @@ OrigList.to_seq xs
     , project_c c
-    , List.to_list project_t ts
+    , OrigList.map project_t ts
     , project_t t
     )
 | TArray t -> `Array (project_t t)
-| TSexp xs -> `Sexp (List.to_list (fun (x, ts) -> x, List.to_list project_t ts) xs)
+| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) -> x, OrigList.map project_t ts) xs)
 
 and project_p : ground_lama_p -> TT.p = function
 | PWildcard -> `Wildcard
 | PTyped (t, p) -> `Typed (project_t t, project_p p)
-| PArray ps -> `Array (List.to_list project_p ps)
-| PSexp (x, ps) -> `Sexp (x, List.to_list project_p ps)
+| PArray ps -> `Array (OrigList.map project_p ps)
+| PSexp (x, ps) -> `Sexp (x, OrigList.map project_p ps)
 | PBoxed -> `Boxed
 | PUnboxed -> `Unboxed
 | PStringTag -> `StringTag
@@ -722,9 +718,9 @@ and project_c : ground_lama_c -> TT.c = function
 | CAnd (l, r) -> `And (project_c l, project_c r)
 | CEq (l, r) -> `Eq (project_t l, project_t r)
 | CInd (l, r) -> `Ind (project_t l, project_t r)
-| CCall (t, ss, s) -> `Call (project_t t, List.to_list project_t ss, project_t s)
-| CMatch (t, ps) -> `Match (project_t t, List.to_list project_p ps)
-| CSexp (x, t, ts) -> `Sexp (x, project_t t, List.to_list project_t ts)
+| CCall (t, ss, s) -> `Call (project_t t, OrigList.map project_t ss, project_t s)
+| CMatch (t, ps) -> `Match (project_t t, OrigList.map project_p ps)
+| CSexp (x, t, ts) -> `Sexp (x, project_t t, OrigList.map project_t ts)
 
 let make_inject () =
     let module M = Monad in
@@ -750,7 +746,8 @@ let make_inject () =
     | `Arrow (xs, c, ts, t) ->
         let bvs = TT.IS.union bvs xs in
 
-        let xs = List.list @@ OrigList.map (!!) @@ TT.IS.elements xs in
+        let xs = GT.foldr GT.list (Fun.flip List.cons) (List.nil ())
+            @@ OrigList.map (!!) @@ TT.IS.elements xs in
 
         let* c = inject_c bvs c in
         let* ts = inject_list (inject_t bvs) ts in
@@ -848,7 +845,8 @@ let solve (c : TT.c) : TT.t Subst.t =
         Seq.iter (Printf.printf "%d ") @@ Seq.map fst free_vars ;
         print_newline () ;
 
-        let free_vars = List.list @@ OrigList.of_seq @@ Seq.map snd free_vars in
+        let free_vars = GT.foldr GT.list (Fun.flip List.cons) (List.nil ())
+            @@ OrigList.of_seq @@ Seq.map snd free_vars in
 
         ocanren { CTop //- c & ans == free_vars }
     ) in
@@ -870,7 +868,7 @@ let solve (c : TT.c) : TT.t Subst.t =
 
     (*
     let ans = Stream.fold (fun ans res ->
-        let ans = AS.add (List.to_list logic_lama_t_to_ground res) ans in
+        let ans = AS.add (OrigList.map logic_lama_t_to_ground res) ans in
 
         if AS.cardinal ans > 1
         then failwith "more than one solution found"
@@ -879,7 +877,7 @@ let solve (c : TT.c) : TT.t Subst.t =
     *)
 
     let ans = Stream.fold (fun ans res ->
-        AS.add (List.to_list logic_lama_t_to_ground res) ans
+        AS.add (OrigList.map logic_lama_t_to_ground res) ans
     ) AS.empty res in
 
     let ans = AS.elements ans in
@@ -897,7 +895,7 @@ let solve (c : TT.c) : TT.t Subst.t =
     in
     *)
 
-    let ans = Stream.take ~n:1 @@ Stream.map (List.to_list logic_lama_t_to_ground) res in
+    let ans = Stream.take ~n:1 @@ Stream.map (OrigList.map logic_lama_t_to_ground) res in
 
     let ans = match ans with
     | [] -> failwith "no one solution found"
