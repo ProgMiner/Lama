@@ -16,11 +16,11 @@ open OCanren.Std
 | TArrow of 'var_list * 'c * 't_list * 't
 with show, compare, foldl, gmap
 
-@type ('t, 'p, 'p_list, 'str) lama_p =
+@type ('t, 'p, 'p_list, 'i) lama_p =
 | PWildcard
 | PTyped    of 't * 'p
 | PArray    of 'p_list
-| PSexp     of 'str * 'p_list
+| PSexp     of 'i * 'p_list
 | PBoxed
 | PUnboxed
 | PStringTag
@@ -29,14 +29,14 @@ with show, compare, foldl, gmap
 | PFunTag
 with show, compare, foldl, gmap
 
-@type ('c, 'str, 't_list, 't, 'p_list) lama_c =
+@type ('c, 'i, 't_list, 't, 'p_list) lama_c =
 | CTop
 | CAnd of 'c * 'c
 | CEq of 't * 't
 | CInd of 't * 't
 | CCall of 't * 't_list * 't
 | CMatch of 't * 'p_list
-| CSexp of 'str * 't * 't_list
+| CSexp of 'i * 't * 't_list
 with show, compare, foldl, gmap
 
 @type ground_lama_t =
@@ -45,17 +45,17 @@ with show, compare, foldl, gmap
     , ground_lama_c
     , ground_lama_t List.ground
     , ground_lama_t
-    , (string * ground_lama_t List.ground) List.ground
+    , (int * ground_lama_t List.ground) List.ground
     ) lama_t
 and ground_lama_p =
     ( ground_lama_t
     , ground_lama_p
     , ground_lama_p List.ground
-    , string
+    , int
     ) lama_p
 and ground_lama_c =
     ( ground_lama_c
-    , string
+    , int
     , ground_lama_t List.ground
     , ground_lama_t
     , ground_lama_p List.ground
@@ -68,17 +68,17 @@ with show, compare, foldl, gmap
     , logic_lama_c
     , logic_lama_t List.logic
     , logic_lama_t
-    , (string logic * logic_lama_t List.logic) logic List.logic
+    , (int logic * logic_lama_t List.logic) logic List.logic
     ) lama_t logic
 and logic_lama_p =
     ( logic_lama_t
     , logic_lama_p
     , logic_lama_p List.logic
-    , string logic
+    , int logic
     ) lama_p logic
 and logic_lama_c =
     ( logic_lama_c
-    , string logic
+    , int logic
     , logic_lama_t List.logic
     , logic_lama_t
     , logic_lama_p List.logic
@@ -91,17 +91,17 @@ type injected_lama_t =
     , injected_lama_c
     , injected_lama_t List.injected
     , injected_lama_t
-    , (string ilogic * injected_lama_t List.injected) ilogic List.injected
+    , (int ilogic * injected_lama_t List.injected) ilogic List.injected
     ) lama_t ilogic
 and injected_lama_p =
     ( injected_lama_t
     , injected_lama_p
     , injected_lama_p List.injected
-    , string ilogic
+    , int ilogic
     ) lama_p ilogic
 and injected_lama_c =
     ( injected_lama_c
-    , string ilogic
+    , int ilogic
     , injected_lama_t List.injected
     , injected_lama_t
     , injected_lama_p List.injected
@@ -256,6 +256,13 @@ let rec logic_lama_t_to_ground : logic_lama_t -> ground_lama_t = function
     (logic_list_to_ground logic_sexp_to_ground)
     x
 
+and logic_sexp_to_ground
+    : (int logic * logic_lama_t List.logic) logic
+    -> int * ground_lama_t List.ground
+= function
+| Var _ -> failwith "variable sexp variant"
+| Value (x, ts) -> (from_logic x, logic_list_to_ground logic_lama_t_to_ground ts)
+
 and logic_lama_p_to_ground : logic_lama_p -> ground_lama_p = function
 | Var _ -> failwith "variable type pattern"
 | Value x -> GT.gmap lama_p
@@ -264,13 +271,6 @@ and logic_lama_p_to_ground : logic_lama_p -> ground_lama_p = function
     (logic_list_to_ground logic_lama_p_to_ground)
     from_logic
     x
-
-and logic_sexp_to_ground
-    : (string logic * logic_lama_t List.logic) logic
-    -> string * ground_lama_t List.ground
-= function
-| Var _ -> failwith "variable sexp variant"
-| Value (x, ts) -> (from_logic x, logic_list_to_ground logic_lama_t_to_ground ts)
 
 and logic_lama_c_to_ground : logic_lama_c -> ground_lama_c = function
 | Var (_, _) -> failwith "variable constraint"
@@ -492,7 +492,7 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
     f xs
 
-let sexp_x_hlp (x : string ilogic) xs (ts : injected_lama_t List.injected) : goal =
+let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
     (* straightforward solution don't work here *)
 
     (*
@@ -664,24 +664,25 @@ module T = Typing
 module TT = T.Type
 module Subst = Map.Make(Int)
 
-let rec project_t : ground_lama_t -> TT.t = function
+let rec project_t get_sexp : ground_lama_t -> TT.t = function
 | TName x -> `Name x
 | TInt -> `Int
 | TString -> `String
 | TArrow (xs, c, ts, t) -> `Arrow
     ( TT.IS.of_seq @@ OrigList.to_seq xs
-    , project_c c
-    , OrigList.map project_t ts
-    , project_t t
+    , project_c get_sexp c
+    , OrigList.map (project_t get_sexp) ts
+    , project_t get_sexp t
     )
-| TArray t -> `Array (project_t t)
-| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) -> x, OrigList.map project_t ts) xs)
+| TArray t -> `Array (project_t get_sexp t)
+| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
+    get_sexp x, OrigList.map (project_t get_sexp) ts) xs)
 
-and project_p : ground_lama_p -> TT.p = function
+and project_p get_sexp : ground_lama_p -> TT.p = function
 | PWildcard -> `Wildcard
-| PTyped (t, p) -> `Typed (project_t t, project_p p)
-| PArray ps -> `Array (OrigList.map project_p ps)
-| PSexp (x, ps) -> `Sexp (x, OrigList.map project_p ps)
+| PTyped (t, p) -> `Typed (project_t get_sexp t, project_p get_sexp p)
+| PArray ps -> `Array (OrigList.map (project_p get_sexp) ps)
+| PSexp (x, ps) -> `Sexp (get_sexp x, OrigList.map (project_p get_sexp) ps)
 | PBoxed -> `Boxed
 | PUnboxed -> `Unboxed
 | PStringTag -> `StringTag
@@ -689,20 +690,43 @@ and project_p : ground_lama_p -> TT.p = function
 | PSexpTag -> `SexpTag
 | PFunTag -> `FunTag
 
-and project_c : ground_lama_c -> TT.c = function
+and project_c get_sexp : ground_lama_c -> TT.c = function
 | CTop -> `Top
-| CAnd (l, r) -> `And (project_c l, project_c r)
-| CEq (l, r) -> `Eq (project_t l, project_t r)
-| CInd (l, r) -> `Ind (project_t l, project_t r)
-| CCall (t, ss, s) -> `Call (project_t t, OrigList.map project_t ss, project_t s)
-| CMatch (t, ps) -> `Match (project_t t, OrigList.map project_p ps)
-| CSexp (x, t, ts) -> `Sexp (x, project_t t, OrigList.map project_t ts)
+| CAnd (l, r) -> `And (project_c get_sexp l, project_c get_sexp r)
+| CEq (l, r) -> `Eq (project_t get_sexp l, project_t get_sexp r)
+| CInd (l, r) -> `Ind (project_t get_sexp l, project_t get_sexp r)
+| CCall (t, ss, s) -> `Call ( project_t get_sexp t
+                            , OrigList.map (project_t get_sexp) ss, project_t get_sexp s
+                            )
+
+| CMatch (t, ps) -> `Match (project_t get_sexp t, OrigList.map (project_p get_sexp) ps)
+| CSexp (x, t, ts) -> `Sexp ( get_sexp x
+                            , project_t get_sexp t
+                            , OrigList.map (project_t get_sexp) ts
+                            )
+
+module SM = Map.Make(String)
 
 let make_inject () =
     let module M = Monad in
     let open M.Syntax in
 
     let free_vars = Stdlib.ref Subst.empty in
+    let sexp_labels = Stdlib.ref SM.empty in
+
+    (* cache_sexp label size - convert label to unique number *)
+    let cache_sexp x n =
+        let x = Printf.sprintf "%s %d" x n in
+
+        try SM.find x !sexp_labels
+        with Not_found ->
+            let cur_sl = !sexp_labels in
+
+            let idx = SM.cardinal cur_sl in
+            sexp_labels := SM.add x idx cur_sl ;
+
+            idx
+    in
 
     let rec inject_list f = function
     | [] -> M.return @@ List.nil ()
@@ -733,18 +757,29 @@ let make_inject () =
     | `Array t -> let* t = inject_t bvs t in M.return @@ tArray t
     | `Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
 
+    and inject_sexp bvs (x, ts) =
+        let x = cache_sexp x (OrigList.length ts) in
+
+        let* ts = inject_list (inject_t bvs) ts in
+        M.return !!(!!x, ts)
+
     and inject_p (bvs : TT.IS.t) : TT.p -> injected_lama_p M.t = function
     | `Wildcard -> M.return @@ pWildcard ()
     | `Typed (t, p) ->
         let* t = inject_t bvs t in
         let* p = inject_p bvs p in
         M.return @@ pTyped t p
+
     | `Array ps ->
         let* ps = inject_list (inject_p bvs) ps in
         M.return @@ pArray ps
+
     | `Sexp (x, ps) ->
+        let x = cache_sexp x (OrigList.length ps) in
+
         let* ps = inject_list (inject_p bvs) ps in
         M.return @@ pSexp !!x ps
+
     | `Boxed -> M.return @@ pBoxed ()
     | `Unboxed -> M.return @@ pUnboxed ()
     | `StringTag -> M.return @@ pStringTag ()
@@ -752,42 +787,47 @@ let make_inject () =
     | `SexpTag -> M.return @@ pSexpTag ()
     | `FunTag -> M.return @@ pFunTag ()
 
-    and inject_sexp bvs (x, ts) =
-        let* ts = inject_list (inject_t bvs) ts in
-        M.return !!(!!x, ts)
-
     and inject_c (bvs : TT.IS.t) : TT.c -> injected_lama_c M.t = function
     | `Top -> M.return @@ cTop ()
     | `And (l, r) ->
         let* l = inject_c bvs l in
         let* r = inject_c bvs r in
         M.return @@ cAnd l r
+
     | `Eq (l, r) ->
         let* l = inject_t bvs l in
         let* r = inject_t bvs r in
         M.return @@ cEq l r
+
     | `Ind (l, r) ->
         let* l = inject_t bvs l in
         let* r = inject_t bvs r in
         M.return @@ cInd l r
+
     | `Call (t, ss, s) ->
         let* t = inject_t bvs t in
         let* ss = inject_list (inject_t bvs) ss in
         let* s = inject_t bvs s in
         M.return @@ cCall t ss s
+
     | `Match (t, ps) ->
         let* t = inject_t bvs t in
         let* ps = inject_list (inject_p bvs) ps in
         M.return @@ cMatch t ps
+
     | `Sexp (x, t, ts) ->
+        let x = cache_sexp x (OrigList.length ts) in
+
         let* t = inject_t bvs t in
         let* ts = inject_list (inject_t bvs) ts in
+
         M.return @@ cSexp !!x t ts
     in
 
     object
 
         method free_vars = !free_vars
+        method sexp_labels = !sexp_labels
 
         method list = inject_list
         method t = inject_t
@@ -886,6 +926,15 @@ let solve (c : TT.c) : TT.t Subst.t =
     let subst = Seq.fold_left (fun subst (v, t) -> Subst.add v t subst) Subst.empty
         @@ Seq.zip free_vars (OrigList.to_seq ans) in
 
+    let module IM = Map.Make(Int) in
+
+    let sexp_labels_inv = IM.of_seq
+        @@ Seq.map (fun (x, l) -> l, x)
+        @@ SM.to_seq inject#sexp_labels
+    in
+
+    let get_sexp x = IM.find x sexp_labels_inv in
+
     if Subst.cardinal subst <> OrigList.length ans
     then failwith "wrong substitution size"
-    else Subst.map project_t subst
+    else Subst.map (project_t get_sexp) subst
