@@ -492,6 +492,8 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
     f xs
 
+let sexp_max_length = Stdlib.ref Int.max_int
+
 let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
     (* We want here to require that xs contains label x with types ts and all other labels
      * is NOT label x
@@ -504,28 +506,30 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
      * and dramatically shrink search space
      * Additionally, we assumes that any x passed to this relation is concrete,
      * don't assert that to not slow down
-     * TODO: maybe we want to assert that all labels are concrete at the end
-     * to remove answers with variable Sexp tails?
      *)
 
+    let max_length = !sexp_max_length in
+
+    let check_n n = if n > max_length then failure else success in
+
     (* require that xs doesn't contain label x *)
-    let rec not_in_tail xs = ocanren
+    let rec not_in_tail n xs = let n' = n + 1 in ocanren { check_n n &
         { xs == []
         | fresh x', xs' in xs == (x', _) :: xs'
-            & x =/= x' & not_in_tail xs'
+            & x =/= x' & not_in_tail n' xs'
         }
-    in
+    } in
 
     (* require that xs contains exactly one label x with correct types *)
-    let rec hlp xs = ocanren
+    let rec hlp n xs = let n' = n + 1 in ocanren { check_n n &
         { fresh x', ts', xs' in xs == (x', ts') :: xs' &
-            { x == x' & ts == ts' & not_in_tail xs'
-            | is_not_var x' & x =/= x' & hlp xs'
+            { x == x' & ts == ts' & not_in_tail n' xs'
+            | is_not_var x' & x =/= x' & hlp n' xs'
             }
         }
-    in
+    } in
 
-    hlp xs
+    hlp 0 xs
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
@@ -701,9 +705,11 @@ let make_inject () =
 
     let rec inject_t (bvs : TT.IS.t) : TT.t -> injected_lama_t M.t = function
     | `Name x when TT.IS.mem x bvs -> M.return @@ tName !!x
-    | `Name x -> (match Subst.find_opt x !free_vars with
+    | `Name x -> begin match Subst.find_opt x !free_vars with
         | None -> let* fv = call_fresh in free_vars := Subst.add x fv !free_vars ; M.return fv
-        | Some t -> M.return t)
+        | Some t -> M.return t
+        end
+
     | `Int -> M.return @@ tInt ()
     | `String -> M.return @@ tString ()
     | `Arrow (xs, c, ts, t) ->
@@ -717,6 +723,7 @@ let make_inject () =
         let* t = inject_t bvs t in
 
         M.return @@ tArrow xs c ts t
+
     | `Array t -> let* t = inject_t bvs t in M.return @@ tArray t
     | `Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
 
@@ -826,6 +833,10 @@ let solve (c : TT.c) : TT.t Subst.t =
 
         let free_vars = GT.foldr GT.list (Fun.flip List.cons) (List.nil ())
             @@ OrigList.of_seq @@ Seq.map snd free_vars in
+
+        (* set max length for any Sexp type *)
+        let sexp_labels_num = SM.cardinal inject#sexp_labels in
+        sexp_max_length := sexp_labels_num ;
 
         ocanren { ans == free_vars & CTop //- c }
     ) in
