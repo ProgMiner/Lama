@@ -231,6 +231,31 @@ module Type = struct
     (* NB: rope-like structure with "lightweight" left branch, important for solver *)
     | c :: cs -> List.fold_left (fun acc c -> `And (c, acc)) c cs
 
+    let c_list cs = c_list @@ List.rev cs
+
+    (* sort constraints by "complexity" to optimize solving *)
+
+    let sort_cs cs =
+        let cmp c1 c2 = match c1, c2 with
+        | `Eq _, `Eq _ -> 0
+        | `Sexp _, `Sexp _ -> 0
+        | `Ind _, `Ind _ -> 0
+        | `Call _, `Call _ -> 0
+        | `Match _, `Match _ -> 0
+        | `Eq _, _ -> -1
+        | _, `Eq _ -> 1
+        | `Sexp _, _ -> -1
+        | _, `Sexp _ -> 1
+        | `Ind _, _ -> -1
+        | _, `Ind _ -> 1
+        | `Call _, _ -> -1
+        | _, `Call _ -> 1
+        | `Match _, _ -> -1
+        | _, `Match _ -> 1
+        in
+
+        List.sort cmp cs
+
     (* solve syntax equality constraints using Robinson's alogrithm *)
 
     let unify =
@@ -276,7 +301,10 @@ module Type = struct
 
     let simplify (c : c) : c * t Subst.t =
         let c = list_c c in
+
         let s, c = unify c in
+        let c = sort_cs c in
+
         subst_c (subst_map_to_fun s) IS.empty (c_list c), s
         (* c_list c, Subst.empty *)
 
