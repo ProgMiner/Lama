@@ -683,7 +683,7 @@ let make_inject () =
 
     (* cache_sexp label size - convert label to unique number *)
     let cache_sexp x n =
-        let x = Printf.sprintf "%s %d" x n in
+        let x = Printf.sprintf "%s_%d" x n in
 
         try SM.find x !sexp_labels
         with Not_found ->
