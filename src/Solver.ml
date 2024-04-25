@@ -874,7 +874,12 @@ let solve (c : TT.c) : TT.t Subst.t =
     in
     *)
 
-    let ans = Stream.take ~n:1 @@ Stream.map (OrigList.map logic_lama_t_to_ground) res in
+    let ans = Stream.take ~n:1 @@ Stream.map Stdlib.Option.get
+        @@ Stream.filter Stdlib.Option.is_some @@ Stream.map (fun ans ->
+            try Some (OrigList.map logic_lama_t_to_ground ans)
+            with _ -> None
+        ) res
+    in
 
     let ans = match ans with
     | [] -> failwith "no one solution found"
