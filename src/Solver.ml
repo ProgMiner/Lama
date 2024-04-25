@@ -493,77 +493,39 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
     f xs
 
 let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
-    (* straightforward solution don't work here *)
+    (* We want here to require that xs contains label x with types ts and all other labels
+     * is NOT label x
+     * We would like to require it using only logical language, but in that case we will get
+     * answers with constrained labels that isn't any of requested label but isn't any concrete
+     * label at all
+     * So we must check additionally that any of labels that are before label x,
+     * are concrete, not logic variables
+     * In such case we will get only Sexp types with concrete labels
+     * and dramatically shrink search space
+     * Additionally, we assumes that any x passed to this relation is concrete,
+     * don't assert that to not slow down
+     * TODO: maybe we want to assert that all labels are concrete at the end
+     * to remove answers with variable Sexp tails?
+     *)
 
-    (*
-    let f n xts res = ocanren {
-        fresh x', ts', n' in xts == (x', ts') & List.lengtho ts' n' &
-            { res == false & { x =/= x' | n =/= n' }
-            | res == true & x == x' & n == n'
-            }
-    } in
-
-    let g xts res = ocanren
-        { res == false & xts =/= (x, ts)
-        | res == true & xts == (x, ts)
+    (* require that xs doesn't contain label x *)
+    let rec not_in_tail xs = ocanren
+        { xs == []
+        | fresh x', xs' in xs == (x', _) :: xs'
+            & x =/= x' & not_in_tail xs'
         }
     in
 
-    ocanren {
-        fresh n, xs', xs'' in xs' =/= [] & List.allo xs'' true & List.lengtho ts n
-            & List.filtero (f n) xs xs' & List.mapo g xs' xs''
-    }
-    *)
-
-    let f n xts res = ocanren {
-        fresh x', ts', n' in xts == (x', ts') & List.lengtho ts' n' &
-            { res == true & { x =/= x' | n =/= n' }
-            | res == false & x == x' & n == n'
-            }
-    } in
-
-    let f n xs = ocanren { fresh xs' in List.mapo (f n) xs xs' & List.allo xs' true } in
-
-    (* loops forever *)
-
-    (*
-    let initial_xs = xs in
-
-    let rec g n xs =
-        debug_var initial_xs (Fun.flip @@ List.reify @@ Pair.reify Reifier.reify (List.reify reify_lama_t)) (function
-        | [xs] ->
-            print_string "xs = " ;
-            print_endline @@ GT.show List.logic (GT.show Pair.logic
-                (GT.show logic @@ GT.show GT.string)
-                (GT.show List.logic @@ GT.show logic_lama_t)) xs ;
-            success
-        ) &&&
-        ocanren {
-        fresh x', ts', xs' in xs == (x', ts') :: xs' &
-            { x == x' & ts == ts' & f n xs' (* found => check no any such in tail *)
-            | x =/= x' & g n xs'            (* wrong label => go next *)
-            | x == x' & fresh n' in List.lengtho ts' n' (* right label => check amount of args *)
-                & n =/= n' & g n xs'        (* wrong amount => go next *)
+    (* require that xs contains exactly one label x with correct types *)
+    let rec hlp xs = ocanren
+        { fresh x', ts', xs' in xs == (x', ts') :: xs' &
+            { x == x' & ts == ts' & not_in_tail xs'
+            | is_not_var x' & x =/= x' & hlp xs'
             }
         }
     in
-    *)
 
-    (* FIXME will not work *)
-    let rec g n xs =
-        debug_var xs (Fun.flip @@ List.reify @@ Pair.reify Reifier.reify (List.reify reify_lama_t)) (function
-        | [Var _] -> ocanren { fresh xs' in xs == (x, ts) :: xs' }
-        | [Value _] -> ocanren {
-            fresh x', ts', xs' in xs == (x', ts') :: xs' &
-                { x == x' & ts == ts' & f n xs' (* found => check no any such in tail *)
-                | x =/= x' & g n xs'            (* wrong label => go next *)
-                | x == x' & fresh n' in List.lengtho ts' n' (* right label => check amount of args *)
-                    & n =/= n' & g n xs'        (* wrong amount => go next *)
-                }
-        })
-    in
-
-    ocanren { fresh n in List.lengtho ts n & g n xs }
+    hlp xs
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
@@ -674,6 +636,7 @@ let rec project_t get_sexp : ground_lama_t -> TT.t = function
     , OrigList.map (project_t get_sexp) ts
     , project_t get_sexp t
     )
+
 | TArray t -> `Array (project_t get_sexp t)
 | TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
     get_sexp x, OrigList.map (project_t get_sexp) ts) xs)
