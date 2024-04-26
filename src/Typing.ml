@@ -76,12 +76,13 @@ module Type = struct
     module Subst = Map.Make(Int)
 
     type t = [
-    | `Name      of int              (* type variable name *)
-    | `Int                           (* integer *)
-    | `String                        (* string *)
-    | `Array     of t                (* array *)
-    | `Sexp      of (string * t list) list (* S-expression *)
-    | `Arrow     of IS.t * c * t list * t (* arrow *)
+    | `Name     of int              (* type variable name *)
+    | `Int                          (* integer *)
+    | `String                       (* string *)
+    | `Array    of t                (* array *)
+    | `Sexp     of (string * t list) list (* S-expression *)
+    | `Arrow    of IS.t * c * t list * t (* arrow *)
+    | `Mu       of int * t          (* mu-type *)
     ]
 
     and p = [
@@ -98,13 +99,13 @@ module Type = struct
     ]
 
     and c = [
-    | `Top                           (* always true *)
-    | `And       of c * c            (* logical AND *)
-    | `Eq        of t * t            (* syntax equality *)
-    | `Ind       of t * t            (* indexable *)
-    | `Call      of t * t list * t   (* callable with args and result types *)
-    | `Match     of t * p list       (* match type with patterns *)
-    | `Sexp      of string * t * t list (* sexp with label and types *)
+    | `Top                          (* always true *)
+    | `And      of c * c            (* logical AND *)
+    | `Eq       of t * t            (* syntax equality *)
+    | `Ind      of t * t            (* indexable *)
+    | `Call     of t * t list * t   (* callable with args and result types *)
+    | `Match    of t * p list       (* match type with patterns *)
+    | `Sexp     of string * t * t list (* sexp with label and types *)
     ]
 
     let show_is is = match IS.elements is with
@@ -115,11 +116,14 @@ module Type = struct
     | `Name x -> Printf.sprintf "tv_%d" x
     | `Int -> "Int"
     | `String -> "String"
-    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall (%s). (%s) => (%s) -> %s"
-        (show_is xs) (show_c c) (GT.show list show_t ts) (show_t t)
     | `Array t -> Printf.sprintf "[%s]" @@ show_t t
     | `Sexp vs -> "Sexp "
         ^ GT.show list (fun (x, ts) -> Printf.sprintf "%s (%s)" x @@ GT.show list show_t ts) vs
+
+    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall (%s). (%s) => (%s) -> %s"
+        (show_is xs) (show_c c) (GT.show list show_t ts) (show_t t)
+
+    | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
     and show_p : p -> _ = function
     | `Wildcard -> "_"
@@ -148,13 +152,17 @@ module Type = struct
     | `Name x -> IS.add x fvs
     | `Int -> fvs
     | `String -> fvs
+    | `Array t -> ftv fvs t
+    | `Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
     | `Arrow (xs, c, ts, t) ->
         let fvs' = List.fold_left ftv IS.empty ts in
         let fvs' = ftv fvs' t in
         let fvs' = ftv_c fvs' c in
-        IS.union fvs (IS.diff fvs' xs)
-    | `Array t -> ftv fvs t
-    | `Sexp ps -> List.fold_left (fun fvs (_, ts) -> List.fold_left ftv fvs ts) fvs ps
+        IS.union fvs @@ IS.diff fvs' xs
+
+    | `Mu (x, t) ->
+        let fvs' = ftv IS.empty t in
+        IS.union fvs @@ IS.remove x fvs'
 
     and ftv_p fvs : p -> _ = function
     | `Wildcard -> fvs
@@ -186,11 +194,15 @@ module Type = struct
     | `Name x -> f x
     | `Int -> `Int
     | `String -> `String
+    | `Array t -> `Array (subst_t f bvs t)
+    | `Sexp xs -> `Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
     | `Arrow (xs, c, ts, t) ->
         let bvs = IS.union bvs xs in
         `Arrow (xs, subst_c f bvs c, List.map (subst_t f bvs) ts, subst_t f bvs t)
-    | `Array t -> `Array (subst_t f bvs t)
-    | `Sexp xs -> `Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
+
+    | `Mu (x, t) ->
+        let bvs = IS.add x bvs in
+        `Mu (x, subst_t f bvs t)
 
     and subst_p f bvs : p -> p = function
     | `Wildcard -> `Wildcard
@@ -268,14 +280,15 @@ module Type = struct
                 else Subst.singleton x @@ `Name y
         | (`Name x, t) ->
             if IS.mem x @@ ftv IS.empty t
-            then failwith "recursive equation" (* TODO *)
+            then Subst.singleton x @@ `Mu (x, t)
             else Subst.singleton x t
         | (t, (`Name _ as t')) -> u (t', t)
         | (`Int, `Int) -> Subst.empty
         | (`String, `String) -> Subst.empty
-        | (`Arrow _, `Arrow _) -> failwith "arrows equality occurred" (* TODO *)
         | (`Array t1, `Array t2) -> u (t1, t2)
         | (`Sexp _, `Sexp _) -> failwith "sexp equality occurred" (* TODO *)
+        | (`Arrow _, `Arrow _) -> failwith "arrows equality occurred" (* TODO *)
+        | (`Mu _, `Mu _) -> failwith "mu-s equality occurred" (* TODO *)
         | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
         in
 

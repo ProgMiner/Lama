@@ -14,6 +14,7 @@ open OCanren.Std
 | TArray of 't
 | TSexp of 'sexp
 | TArrow of 'var_list * 'c * 't_list * 't
+| TMu of 'var * 't
 with show, compare, foldl, gmap
 
 @type ('t, 'p, 'p_list, 'i) lama_p =
@@ -114,6 +115,7 @@ let tString () = OCanren.inj TString
 let tArray t = OCanren.inj (TArray t)
 let tSexp xs = OCanren.inj (TSexp xs)
 let tArrow xs c ts t = OCanren.inj (TArrow (xs, c, ts, t))
+let tMu x t = OCanren.inj (TMu (x, t))
 
 let pWildcard () = OCanren.inj PWildcard
 let pTyped t p = OCanren.inj (PTyped (t, p))
@@ -324,6 +326,7 @@ let rec filter_subst xs s res = ocanren
         }
     }
 
+(* TODO handle mu *)
 let rec subst_t s t t' =
     (*
     debug_var t (Fun.flip reify_lama_t) (fun t ->
@@ -390,6 +393,7 @@ type match_t_res =
     , (injected_lama_t, injected_lama_t) Pair.injected List.injected
     ) Pair.injected
 
+(* assumes that t is not Mu *)
 let rec match_t t p (res : match_t_res Option.groundi) =
     let some = Option.some in
 
@@ -531,6 +535,7 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
 
     hlp 0 xs
 
+(* TODO handle mu *)
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
     debug_var c' (Fun.flip reify_lama_c) (fun c's ->
@@ -567,6 +572,7 @@ and match_sexp_hlp c xs ps = ocanren
         & match_sexp_hlp c xs' ps
     }
 
+(* assumes that t is not Mu *)
 and match_t_ast c t ps =
     let some = Option.some in
     let o = Nat.o in
@@ -634,6 +640,10 @@ let rec project_t get_sexp : ground_lama_t -> TT.t = function
 | TName x -> `Name x
 | TInt -> `Int
 | TString -> `String
+| TArray t -> `Array (project_t get_sexp t)
+| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
+    get_sexp x, OrigList.map (project_t get_sexp) ts) xs)
+
 | TArrow (xs, c, ts, t) -> `Arrow
     ( TT.IS.of_seq @@ OrigList.to_seq xs
     , project_c get_sexp c
@@ -641,9 +651,7 @@ let rec project_t get_sexp : ground_lama_t -> TT.t = function
     , project_t get_sexp t
     )
 
-| TArray t -> `Array (project_t get_sexp t)
-| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
-    get_sexp x, OrigList.map (project_t get_sexp) ts) xs)
+| TMu (x, t) -> `Mu (x, project_t get_sexp t)
 
 and project_p get_sexp : ground_lama_p -> TT.p = function
 | PWildcard -> `Wildcard
@@ -712,6 +720,9 @@ let make_inject () =
 
     | `Int -> M.return @@ tInt ()
     | `String -> M.return @@ tString ()
+    | `Array t -> let* t = inject_t bvs t in M.return @@ tArray t
+    | `Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
+
     | `Arrow (xs, c, ts, t) ->
         let bvs = TT.IS.union bvs xs in
 
@@ -724,8 +735,10 @@ let make_inject () =
 
         M.return @@ tArrow xs c ts t
 
-    | `Array t -> let* t = inject_t bvs t in M.return @@ tArray t
-    | `Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
+    | `Mu (x, t) ->
+        let bvs = TT.IS.add x bvs in
+        let* t = inject_t bvs t in
+        M.return @@ tMu !!x t
 
     and inject_sexp bvs (x, ts) =
         let x = cache_sexp x (OrigList.length ts) in
