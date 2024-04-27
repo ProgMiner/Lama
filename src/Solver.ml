@@ -351,8 +351,8 @@ let rec subst_t s t t' =
         & t' == TArrow (fxs, fc', fts', ft') & filter_subst fxs s s'
         & subst_c s' fc fc' & subst_t s' ft ft'
         & List.mapo (subst_t s') fts fts' }
-    | is_not_var t & { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
-        & filter_subst [x] s s' & subst_t s' t1 t1' }
+    | { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
+        & is_not_var x & filter_subst [x] s s' & subst_t s' t1 t1' }
     }
 
 and subst_sexp s xts xts' = ocanren {
@@ -590,6 +590,7 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     { c == c' (* C-Refl *)
     (* | c' == CTop (* C-Top *) always in c *)
     | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c1 & c //- c2 } (* C-And *)
+    (* | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c2 & c //- c1 } (* C-And *) *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c1 //- c' } (* C-AndL *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c2 //- c' } (* C-AndR *)
     (* | { fresh t in c' == CEq (t, t) } *)
@@ -597,8 +598,9 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh t1, t2 in c' == CInd (t1, t2) & unmu t1 (TArray t2) } (* C-IndArray *)
     | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs) & ind_sexp_hlp xs t2 } (* C-IndSexp *)
     | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t) & unmu f (TArrow (fxs, fc, fts, ft))
-        & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
-        & c //- fc' } (* C-Call *)
+        & { is_var fxs & fxs == [] | is_not_var fxs } & make_subst fxs s
+        & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
+        & { is_var fc' & fc' == CTop | is_not_var fc' } & c //- fc' } (* C-Call *)
     | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
     | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
     | { fresh t, t', ps in c' == CMatch (t, ps) & unmu t (TArray t') & match_t_ast c (TArray t') ps } (* C-MatchArray *)

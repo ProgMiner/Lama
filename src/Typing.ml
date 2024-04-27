@@ -319,7 +319,6 @@ module Type = struct
         let c = sort_cs c in
 
         subst_c (subst_map_to_fun s) IS.empty (c_list c), s
-        (* c_list c, Subst.empty *)
 
     (* split constraint by given bound and free type variables *)
 
