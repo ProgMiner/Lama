@@ -535,7 +535,22 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
 
     hlp 0 xs
 
-(* TODO handle mu *)
+(* unfolds Mu in t if t is exactly Mu in current state *)
+let unmu t t' =
+    (*
+    debug_var t (Fun.flip reify_lama_t) (fun ts ->
+        Printf.printf "unmu: %s" (GT.show GT.list (GT.show logic_lama_t) ts) ;
+        print_newline () ;
+        success) &&&
+    *)
+    ocanren
+    { is_var t & t == t'
+    | is_not_var t &
+        { t =/= TMu (_, _) & t == t'
+        | fresh x, s in t == TMu (x, s) & subst_t [(x, t)] s t'
+        }
+    }
+
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (*
     debug_var c' (Fun.flip reify_lama_c) (fun c's ->
@@ -551,18 +566,18 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh c1, c2 in c == CAnd (c1, c2) & c2 //- c' } (* C-AndR *)
     (* | { fresh t in c' == CEq (t, t) } *)
     | c' == CInd (TString, TInt) (* C-IndString *)
-    | { fresh t in c' == CInd (TArray t, t) } (* C-IndArray *)
-    | { fresh xs, t in c' == CInd (TSexp xs, t) & ind_sexp_hlp xs t } (* C-IndSexp *)
-    | { fresh fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (TArrow (fxs, fc, fts, ft), ts, t)
+    | { fresh t1, t2 in c' == CInd (t1, t2) & unmu t1 (TArray t2) } (* C-IndArray *)
+    | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs) & ind_sexp_hlp xs t2 } (* C-IndSexp *)
+    | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t) & unmu f (TArrow (fxs, fc, fts, ft))
         & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
         & c //- fc' } (* C-Call *)
     | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
     | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
-    | { fresh t, ps in c' == CMatch (TArray t, ps) & match_t_ast c (TArray t) ps } (* C-MatchArray *)
-    | { fresh xs, ps in c' == CMatch (TSexp xs, ps) & match_sexp_hlp c xs ps } (* C-MatchSexp *)
-    | { fresh fxs, fc, fts, ft, ps in c' == CMatch (TArrow (fxs, fc, fts, ft), ps)
+    | { fresh t, t', ps in c' == CMatch (t, ps) & unmu t (TArray t') & match_t_ast c (TArray t') ps } (* C-MatchArray *)
+    | { fresh t, xs, ps in c' == CMatch (t, ps) & unmu t (TSexp xs) & match_sexp_hlp c xs ps } (* C-MatchSexp *)
+    | { fresh f, fxs, fc, fts, ft, ps in c' == CMatch (f, ps) & unmu f (TArrow (fxs, fc, fts, ft))
         & match_t_ast c (TArrow (fxs, fc, fts, ft)) ps } (* C-MatchFun *)
-    | { fresh x, xs, ts in c' == CSexp (x, TSexp xs, ts) & sexp_x_hlp x xs ts } (* C-Sexp *)
+    | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs) & sexp_x_hlp x xs ts } (* C-Sexp *)
     }
 
 and match_sexp_hlp c xs ps = ocanren
