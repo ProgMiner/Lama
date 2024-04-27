@@ -481,22 +481,32 @@ let rec match_t t p (res : match_t_res Option.groundi) =
         }
     }
 
-let ind_sexp_hlp xs (t : injected_lama_t) : goal =
-    let rec hlp ts = ocanren
-        { ts == []
-        | fresh ts' in ts == t :: ts' & hlp ts'
-        }
-    in
-
-    let rec f xs = ocanren
-        { xs == []
-        | fresh ts, xs' in xs == (_, ts) :: xs' & hlp ts & f xs'
-        }
-    in
-
-    f xs
-
 let sexp_max_length = Stdlib.ref Int.max_int
+let sexp_max_args = Stdlib.ref Int.max_int
+
+let ind_sexp_hlp xs (t : injected_lama_t) : goal =
+    let max_length = !sexp_max_length in
+    let max_args = !sexp_max_args in
+
+    let check_n n = if n > max_args then failure else success in
+
+    let rec hlp n ts = let n' = n + 1 in ocanren { check_n n &
+        { ts == []
+        | fresh ts' in ts == t :: ts' & hlp n' ts'
+        }
+    } in
+
+    let hlp ts = hlp 0 ts in
+
+    let check_n n = if n > max_length then failure else success in
+
+    let rec f n xs = let n' = n + 1 in ocanren { check_n n &
+        { xs == []
+        | fresh ts, xs' in xs == (_, ts) :: xs' & hlp ts & f n' xs'
+        }
+    } in
+
+    f 0 xs
 
 let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
     (* We want here to require that xs contains label x with types ts and all other labels
@@ -703,9 +713,12 @@ let make_inject () =
 
     let free_vars = Stdlib.ref Subst.empty in
     let sexp_labels = Stdlib.ref SM.empty in
+    let sexp_max_args = Stdlib.ref 0 in
 
     (* cache_sexp label size - convert label to unique number *)
     let cache_sexp x n =
+        sexp_max_args := Int.max !sexp_max_args n ;
+
         let x = Printf.sprintf "%s_%d" x n in
 
         try SM.find x !sexp_labels
@@ -826,6 +839,7 @@ let make_inject () =
 
         method free_vars = !free_vars
         method sexp_labels = !sexp_labels
+        method sexp_max_args = !sexp_max_args
 
         method list = inject_list
         method t = inject_t
@@ -863,8 +877,13 @@ let solve (c : TT.c) : TT.t Subst.t =
             @@ OrigList.of_seq @@ Seq.map snd free_vars in
 
         (* set max length for any Sexp type *)
-        let sexp_labels_num = SM.cardinal inject#sexp_labels in
-        sexp_max_length := sexp_labels_num ;
+        sexp_max_length := SM.cardinal inject#sexp_labels ;
+
+        (* set max number of args of Sexp constructor *)
+        sexp_max_args := inject#sexp_max_args ;
+
+        Printf.printf "Max Sexp labels: %d\n" !sexp_max_length ;
+        Printf.printf "Max args of Sexp ctor: %d\n" !sexp_max_args ;
 
         ocanren { ans == free_vars & CTop //- c }
     ) in
