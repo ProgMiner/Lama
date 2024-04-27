@@ -242,6 +242,10 @@ let reify_lama_t = reify_lama_t reify_lama_c
 let reify_lama_p = reify_lama_p reify_lama_t
 let reify_lama_c = reify_lama_c reify_lama_t
 
+let reify_subst xs = List.reify (Pair.reify Reifier.reify reify_lama_t) xs
+let show_subst = GT.show List.logic @@ GT.show Pair.logic
+    (GT.show logic (GT.show int)) (GT.show logic_lama_t)
+
 let rec logic_list_to_ground (f : 'a -> 'b) : 'a List.logic -> 'b List.ground = function
 | Var _ -> []
 | Value List.Nil -> []
@@ -321,20 +325,21 @@ let rec subst_v x s t = ocanren
 let rec filter_subst xs s res = ocanren
     { s == [] & res == []
     | fresh x, t, s', has_var in s == (x, t) :: s' & list_member x xs has_var &
-        { has_var == false & fresh res' in res == (x, t) :: res' & filter_subst xs s' res'
+        { has_var == false & { fresh res' in res == (x, t) :: res' & filter_subst xs s' res' }
         | has_var == true & filter_subst xs s' res
         }
     }
 
-(* TODO handle mu *)
 let rec subst_t s t t' =
     (*
     debug_var t (Fun.flip reify_lama_t) (fun t ->
         debug_var t' (Fun.flip reify_lama_t) (fun t' ->
-            Printf.printf "subst : %s |-> %s\n"
-                (GT.show GT.list (GT.show logic_lama_t) t)
-                (GT.show GT.list (GT.show logic_lama_t) t') ;
-            success)) &&&
+            debug_var s (Fun.flip reify_subst) (fun s ->
+                Printf.printf "subst : %s |- %s -> %s\n"
+                    (GT.show GT.list (GT.show logic_lama_t) t)
+                    (GT.show GT.list show_subst s)
+                    (GT.show GT.list (GT.show logic_lama_t) t') ;
+                success))) &&&
     *)
     ocanren
     { { fresh x in t == TName x & subst_v x s t' }
@@ -346,6 +351,8 @@ let rec subst_t s t t' =
         & t' == TArrow (fxs, fc', fts', ft') & filter_subst fxs s s'
         & subst_c s' fc fc' & subst_t s' ft ft'
         & List.mapo (subst_t s') fts fts' }
+    | is_not_var t & { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
+        & filter_subst [x] s s' & subst_t s' t1 t1' }
     }
 
 and subst_sexp s xts xts' = ocanren {
@@ -367,7 +374,18 @@ and subst_p s p p' = ocanren
     | p == PFunTag & p' == PFunTag
     }
 
-and subst_c s c c' = ocanren
+and subst_c s c c' =
+    (*
+    debug_var c (Fun.flip reify_lama_c) (fun c ->
+        debug_var c' (Fun.flip reify_lama_c) (fun c' ->
+            debug_var s (Fun.flip reify_subst) (fun s ->
+                Printf.printf "subst : %s |- %s -> %s\n"
+                    (GT.show GT.list (GT.show logic_lama_c) c)
+                    (GT.show GT.list show_subst s)
+                    (GT.show GT.list (GT.show logic_lama_c) c') ;
+                success))) &&&
+    *)
+    ocanren
     { c == CTop & c' == CTop
     | { fresh c1, c1', c2, c2' in c == CAnd (c1, c2) & c' == CAnd (c1', c2')
         & subst_c s c1 c1' & subst_c s c2 c2' }
