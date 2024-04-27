@@ -342,36 +342,44 @@ let rec subst_t s t t' =
                 success))) &&&
     *)
     ocanren
-    { { fresh x in t == TName x & subst_v x s t' }
-    | t == TInt & t' == TInt
-    | t == TString & t' == TString
-    | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
-    | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
-    | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
-        & t' == TArrow (fxs, fc', fts', ft') & filter_subst fxs s s'
-        & subst_c s' fc fc' & subst_t s' ft ft'
-        & List.mapo (subst_t s') fts fts' }
-    | { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
-        & is_not_var x & filter_subst [x] s s' & subst_t s' t1 t1' }
+    { s == [] & t == t'
+    | s =/= [] &
+        { { fresh x in t == TName x & subst_v x s t' }
+        | t == TInt & t' == TInt
+        | t == TString & t' == TString
+        | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
+        | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
+        | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
+            & t' == TArrow (fxs, fc', fts', ft') & filter_subst fxs s s'
+            & subst_c s' fc fc' & subst_t s' ft ft'
+            & List.mapo (subst_t s') fts fts' }
+        | { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
+            & is_not_var x & filter_subst [x] s s' & subst_t s' t1 t1' }
+        }
     }
 
-and subst_sexp s xts xts' = ocanren {
-    fresh x, ts, ts' in xts == (x, ts) & xts' == (x, ts') & List.mapo (subst_t s) ts ts'
-}
+and subst_sexp s xts xts' = ocanren
+    { s == [] & xts == xts'
+    | s =/= [] & fresh x, ts, ts' in xts == (x, ts) & xts' == (x, ts')
+        & List.mapo (subst_t s) ts ts'
+    }
 
 and subst_p s p p' = ocanren
-    { p == PWildcard & p' == PWildcard
-    | { fresh t, t', p1, p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
-        & subst_t s t t' & subst_p s p1 p1' }
-    | { fresh ps, ps' in p == PArray ps & p' == PArray ps' & List.mapo (subst_p s) ps ps' }
-    | { fresh x, ps, ps' in p == PSexp (x, ps) & p' == PSexp (x, ps')
-        & List.mapo (subst_p s) ps ps' }
-    | p == PBoxed & p' == PBoxed
-    | p == PUnboxed & p' == PUnboxed
-    | p == PStringTag & p' == PStringTag
-    | p == PArrayTag & p' == PArrayTag
-    | p == PSexpTag & p' == PSexpTag
-    | p == PFunTag & p' == PFunTag
+    { s == [] & p == p'
+    | s =/= [] &
+        { p == PWildcard & p' == PWildcard
+        | { fresh t, t', p1, p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
+            & subst_t s t t' & subst_p s p1 p1' }
+        | { fresh ps, ps' in p == PArray ps & p' == PArray ps' & List.mapo (subst_p s) ps ps' }
+        | { fresh x, ps, ps' in p == PSexp (x, ps) & p' == PSexp (x, ps')
+            & List.mapo (subst_p s) ps ps' }
+        | p == PBoxed & p' == PBoxed
+        | p == PUnboxed & p' == PUnboxed
+        | p == PStringTag & p' == PStringTag
+        | p == PArrayTag & p' == PArrayTag
+        | p == PSexpTag & p' == PSexpTag
+        | p == PFunTag & p' == PFunTag
+        }
     }
 
 and subst_c s c c' =
@@ -386,19 +394,22 @@ and subst_c s c c' =
                 success))) &&&
     *)
     ocanren
-    { c == CTop & c' == CTop
-    | { fresh c1, c1', c2, c2' in c == CAnd (c1, c2) & c' == CAnd (c1', c2')
-        & subst_c s c1 c1' & subst_c s c2 c2' }
-    | { fresh t1, t1', t2, t2' in c == CEq (t1, t2) & c' == CEq (t1', t2')
-        & subst_t s t1 t1' & subst_t s t2 t2' }
-    | { fresh t1, t1', t2, t2' in c == CInd (t1, t2) & c' == CInd (t1', t2')
-        & subst_t s t1 t1' & subst_t s t2 t2' }
-    | { fresh f, f', ts, ts', t, t' in c == CCall (f, ts, t) & c' == CCall (f', ts', t')
-        & subst_t s f f' & subst_t s t t' & List.mapo (subst_t s) ts ts' }
-    | { fresh t, ps, t', ps' in c == CMatch (t, ps) & c' == CMatch (t', ps')
-        & subst_t s t t' & List.mapo (subst_p s) ps ps' }
-    | { fresh x, t, t', ts, ts' in c == CSexp (x, t, ts) & c' == CSexp (x, t', ts')
-        & subst_t s t t' & List.mapo (subst_t s) ts ts' }
+    { s == [] & c == c'
+    | s =/= [] &
+        { c == CTop & c' == CTop
+        | { fresh c1, c1', c2, c2' in c == CAnd (c1, c2) & c' == CAnd (c1', c2')
+            & subst_c s c1 c1' & subst_c s c2 c2' }
+        | { fresh t1, t1', t2, t2' in c == CEq (t1, t2) & c' == CEq (t1', t2')
+            & subst_t s t1 t1' & subst_t s t2 t2' }
+        | { fresh t1, t1', t2, t2' in c == CInd (t1, t2) & c' == CInd (t1', t2')
+            & subst_t s t1 t1' & subst_t s t2 t2' }
+        | { fresh f, f', ts, ts', t, t' in c == CCall (f, ts, t) & c' == CCall (f', ts', t')
+            & subst_t s f f' & subst_t s t t' & List.mapo (subst_t s) ts ts' }
+        | { fresh t, ps, t', ps' in c == CMatch (t, ps) & c' == CMatch (t', ps')
+            & subst_t s t t' & List.mapo (subst_p s) ps ps' }
+        | { fresh x, t, t', ts, ts' in c == CSexp (x, t, ts) & c' == CSexp (x, t', ts')
+            & subst_t s t t' & List.mapo (subst_t s) ts ts' }
+        }
     }
 
 let rec make_subst xs res = ocanren
@@ -598,9 +609,9 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh t1, t2 in c' == CInd (t1, t2) & unmu t1 (TArray t2) } (* C-IndArray *)
     | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs) & ind_sexp_hlp xs t2 } (* C-IndSexp *)
     | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t) & unmu f (TArrow (fxs, fc, fts, ft))
-        & { is_var fxs & fxs == [] | is_not_var fxs } & make_subst fxs s
-        & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
-        & { is_var fc' & fc' == CTop | is_not_var fc' } & c //- fc' } (* C-Call *)
+        & { is_var fxs & fxs == [] | is_not_var fxs } & { is_var fc & fc == CTop | is_not_var fc }
+        & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
+        & c //- fc' } (* C-Call *)
     | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
     | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
     | { fresh t, t', ps in c' == CMatch (t, ps) & unmu t (TArray t') & match_t_ast c (TArray t') ps } (* C-MatchArray *)
@@ -659,7 +670,7 @@ and match_t_ast c t ps =
                 success))) &&&
     *)
 
-    ocanren { fresh num, tps, tps' in match_hlp ps num tps & num =/= o
+    ocanren { fresh num, tps, tps' in num =/= o & match_hlp ps num tps
         & group_by_fst tps tps' & match_c_hlp tps' } (* MT-Ast *)
 
 
