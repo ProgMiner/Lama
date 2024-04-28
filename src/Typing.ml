@@ -412,7 +412,7 @@ module Type = struct
                 let c = list_c c in
 
                 let s, c = unify_c c in
-                let s, c = apply_rcf fvs s c in
+                let s, c = apply_rcf s c in
                 let c = sort_cs c in
 
                 (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
@@ -425,14 +425,14 @@ module Type = struct
 
                 c_list c, s
 
-            and apply_rcf fvs s c =
+            and apply_rcf s c =
                 let exception Changed in
 
                 let new_c = Stdlib.ref c in
                 let new_s = Stdlib.ref s in
 
                 try
-                    Subst.iter (fun x t -> match flatten_recursive_calls fvs new_c t with
+                    Subst.iter (fun x t -> match flatten_recursive_calls new_c t with
                     | Some (t', s') ->
                         let s = Subst.add x t' s in (* s == !new_s *)
                         new_s := subst_concat s s' ;
@@ -447,7 +447,7 @@ module Type = struct
 
                     s, c
 
-                with Changed -> apply_rcf fvs !new_s !new_c
+                with Changed -> apply_rcf !new_s !new_c
 
             (* recursive calls flattening
              *
@@ -470,9 +470,6 @@ module Type = struct
              *    substituion) and split them on bound and free (got new free constraints)
              *
              * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
-             *
-             * TODO it works wrong with variables that must be free because we don't know
-             *      actual FVs that was in place where type was introduced
              *)
             and flatten_recursive_calls =
                 let rec rcf x has_rc changed : c -> c = function
@@ -510,15 +507,17 @@ module Type = struct
                 | c -> c
                 in
 
-                fun fvs new_c : (t -> (t * t Subst.t) option) -> function
-                | `Mu (x, `Arrow (_, c, ts, t)) ->
+                fun new_c : (t -> (t * t Subst.t) option) -> function
+                | `Mu (x, (`Arrow (_, c, ts, t) as t')) ->
                     let has_rc = Stdlib.ref false in
                     let changed = Stdlib.ref false in
 
                     let c = List.map (rcf x has_rc changed) @@ list_c c in
 
                     if !changed then
-                        let fvs = IS.add x fvs in
+                        (* essential FVs at the moment when Arrow was introduced *)
+                        let fvs = ftv IS.empty t' in
+
                         let c, s = simplify fvs @@ c_list c in
 
                         if Subst.mem x s then failwith "recursive variable unified" ;
