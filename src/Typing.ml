@@ -227,6 +227,11 @@ module Type = struct
 
     let subst_map_to_fun s x = Option.value (Subst.find_opt x s) ~default:(`Name x)
 
+    (* applies s' to s and adds bindings from s' to s, s' mustn't include bindings of s *)
+    let subst_concat s s' =
+        let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
+        Subst.union (fun _ -> failwith "duplicated variables in substitution") s s'
+
     (* list of constraints without And and Top *)
 
     let list_c =
@@ -270,28 +275,27 @@ module Type = struct
 
     (* solve syntax equality constraints using Robinson's alogrithm *)
 
-    let unify =
-        let rec u : t * t -> _ = function
-        | (`Name x, `Name y) ->
-            if x == y
-            then Subst.empty
-            else if x < y
-                then Subst.singleton y @@ `Name x
-                else Subst.singleton x @@ `Name y
-        | (`Name x, t) ->
-            if IS.mem x @@ ftv IS.empty t
-            then Subst.singleton x @@ `Mu (x, t)
-            else Subst.singleton x t
-        | (t, (`Name _ as t')) -> u (t', t)
-        | (`Int, `Int) -> Subst.empty
-        | (`String, `String) -> Subst.empty
-        | (`Array t1, `Array t2) -> u (t1, t2)
-        | (`Sexp _, `Sexp _) -> failwith "sexp equality occurred" (* TODO *)
-        | (`Arrow _, `Arrow _) -> failwith "arrows equality occurred" (* TODO *)
-        | (`Mu _, `Mu _) -> failwith "mu-s equality occurred" (* TODO *)
-        | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
-        in
+    let rec unify : t * t -> _ = function
+    | (`Name x, `Name y) when x == y -> Subst.empty
+    | (`Name x, `Name y) when x < y -> Subst.singleton y @@ `Name x
+    | (`Name x, `Name y) -> Subst.singleton x @@ `Name y
+    | (`Name x, t) when IS.mem x @@ ftv IS.empty t -> begin match t with
+        | `Mu _ -> failwith "double Mu" (* TODO *)
+        | _ -> Subst.singleton x @@ `Mu (x, t)
+        end
 
+    | (`Name x, t) -> Subst.singleton x t
+    | (t, (`Name _ as t')) -> unify (t', t)
+    | (`Int, `Int) -> Subst.empty
+    | (`String, `String) -> Subst.empty
+    | (`Array t1, `Array t2) -> unify (t1, t2)
+    | (`Sexp _, `Sexp _) -> failwith "sexp equality occurred" (* TODO *)
+    | (`Arrow _, `Arrow _) -> failwith "arrows equality occurred" (* TODO *)
+    | (`Mu _, _) -> failwith "mu-s equality occurred" (* TODO *)
+    | (_, `Mu _) -> failwith "mu-s equality occurred" (* TODO *)
+    | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
+
+    let unify_c =
         let f (s, res) = function
         | `Top -> failwith "ill-formed constraint list (Top)"
         | `And _ -> failwith "ill-formed constraint list (And)"
@@ -300,25 +304,13 @@ module Type = struct
             let l = subst_t sf IS.empty l in
             let r = subst_t sf IS.empty r in
 
-            let s' = u (l, r) in
+            let s' = unify (l, r) in
+            subst_concat s s', res
 
-            let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
-            Subst.union (fun _ -> failwith "duplicated variables in substitution") s s', res
         | c -> s, c :: res
         in
 
         fun c -> List.fold_left f (Subst.empty, []) c
-
-    (* trivial simplifier *)
-    (* TODO simplify better *)
-
-    let simplify (c : c) : c * t Subst.t =
-        let c = list_c c in
-
-        let s, c = unify c in
-        let c = sort_cs c in
-
-        subst_c (subst_map_to_fun s) IS.empty (c_list c), s
 
     (* split constraint by given bound and free type variables *)
 
@@ -403,6 +395,139 @@ module Type = struct
             `Name idx
         in
 
+        (* simplifier
+         *
+         * Applies following passes:
+         * 1. Eq elimination (eliminate Eq(t1, t2) by unification of t1 = t2)
+         * 2. Recursive calls flattening (convert mutual recursive Calls into direct recursive Calls)
+         *)
+        (* TODO simplify better *)
+
+        let simplify =
+            let rec simplify fvs (c : c) : c * t Subst.t =
+                let c = list_c c in
+
+                let s, c = unify_c c in
+                let s, c = apply_rcf fvs s c in
+                let c = sort_cs c in
+
+                (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
+                subst_c (subst_map_to_fun s) IS.empty (c_list c), s
+
+            and apply_rcf fvs s c =
+                let exception Changed in
+
+                let new_c = Stdlib.ref c in
+                let new_s = Stdlib.ref s in
+
+                try
+                    Subst.iter (fun x t -> match flatten_recursive_calls fvs new_c t with
+                    | Some (t', s') ->
+                        let s = Subst.add x t' s in (* s == !new_s *)
+                        new_s := subst_concat s s' ;
+
+                        Printf.printf "Recursive calls flattened in tv_%d:\n" x ;
+                        Printf.printf "  Before: %s\n" (show_t t) ;
+                        Printf.printf "  After : %s\n" (show_t t') ;
+                        raise Changed
+
+                    | None -> ()
+                    ) s ;
+
+                    s, c
+
+                with Changed -> apply_rcf fvs !new_s !new_c
+
+            (* recursive calls flattening
+             *
+             * Given type of form (mu x. \/xs. C => (ts) -> t), free variables set (of context)
+             *
+             * 1. Recursively traverse constraints (only in Call(Arrow(...), ...)) from down to up
+             *   a) If there isn't Call(x, ...), keep in untouched
+             *   b) If there is Call(x, ...) - unpack all constraints from Call by refreshing
+             *      bound variables of Arrow and generating Eq for args and result and refreshed
+             *      formal parameters and result types respectively:
+             *
+             *      x |-rcf- Call(\/xs. (... /\ Call(x, ...) /\ ... = C) => (ts) -> t, taus, tau)
+             *                                          ||
+             *                                          || ys <- fresh vars
+             *                                          \/
+             *          C [xs |-> ys] /\ Eq(ts_i [xs |-> ys], taus_i) /\ Eq(t [xs |-> ys], tau)
+             *
+             * 2. After that we have flatten constraint but with Eq and maybe unbound constraints
+             *    so we need to simplify constraints (including Eq elimination so we got
+             *    substituion) and split them on bound and free (got new free constraints)
+             *)
+            and flatten_recursive_calls =
+                let rec rcf x has_rc changed : c -> c = function
+                | `Call (`Arrow (xs, c, ts, t), taus, tau) as c' ->
+                    if List.length ts <> List.length taus then failwith @@ Printf.sprintf
+                        "wrong number of arguments in call (%d expected but %d given)"
+                        (List.length ts) (List.length taus) ;
+
+                    let nested_has_rc = Stdlib.ref false in
+                    let nested_changed = Stdlib.ref false in
+                    let c = List.map (rcf x nested_has_rc nested_changed) @@ list_c c in
+
+                    if !nested_has_rc then
+                        let xs = IS.elements xs in
+                        let ys = List.map (fun _ -> new_tv ()) xs in
+
+                        let s = List.map2 (fun x y -> x, y) xs ys in
+                        let s = Subst.of_seq @@ List.to_seq s in
+                        let sf = subst_map_to_fun s in
+
+                        let c = subst_c sf IS.empty @@ c_list c in
+                        let ts = List.map (subst_t sf IS.empty) ts in
+                        let t = subst_t sf IS.empty t in
+
+                        let eqs = List.map2 (fun t tau -> `Eq (t, tau)) (t :: ts) (tau :: taus) in
+                        let eqs = c_list eqs in
+
+                        has_rc := true ;
+                        changed := true ;
+                        `And (c, eqs)
+
+                    else c'
+
+                | `Call (`Name y, _, _) as c when x = y -> has_rc := true ; c
+                | c -> c
+                in
+
+                fun fvs new_c : (t -> (t * t Subst.t) option) -> function
+                | `Mu (x, `Arrow (_, c, ts, t)) ->
+                    let has_rc = Stdlib.ref false in
+                    let changed = Stdlib.ref false in
+
+                    let c = List.map (rcf x has_rc changed) @@ list_c c in
+
+                    if !changed then
+                        let fvs = IS.add x fvs in
+                        let c, s = simplify fvs @@ c_list c in
+
+                        if Subst.mem x s then failwith "recursive variable unified" ;
+
+                        let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
+                        let fvs = IS.filter (fun fv -> not @@ Subst.mem fv s) fvs in
+                        let ts = List.map subst_t' ts in
+                        let t = subst_t' t in
+
+                        let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+                        let bvs, bc, fc = split_c signature_tvs fvs c in
+
+                        new_c := list_c fc @ !new_c ;
+
+                        (* we don't eliminate recursion at all so x must present in bc *)
+                        Some (`Mu (x, `Arrow (bvs, bc, ts, t)), s)
+
+                    else None
+
+                | _ -> None
+            in
+
+            simplify
+        in
+
         let rec infer_p ctx : Pattern.t -> p * t Context.t = function
         | Pattern.Wildcard -> `Wildcard, ctx
         | Pattern.Named (x, p) ->
@@ -410,12 +535,15 @@ module Type = struct
             let ctx = Context.add x t ctx in
             let p, ctx = infer_p ctx p in
             `Typed (t, p), ctx
+
         | Pattern.Array ps ->
             let ps, ctx = infer_ps ctx ps in
             `Array ps, ctx
+
         | Pattern.Sexp (x, ps) ->
             let ps, ctx = infer_ps ctx ps in
             `Sexp (x, ps), ctx
+
         | Pattern.Const _ -> `Unboxed, ctx
         | Pattern.String _ -> `StringTag, ctx
         | Pattern.Boxed -> `Boxed, ctx
@@ -437,29 +565,35 @@ module Type = struct
             let c2, t = infer ctx e in
             (* TODO apply fixpoint on mutually recursive definitions *)
             `And (c1, c2), t
+
         | E.Seq (l, r) ->
             let c1, _ = infer ctx l in
             let c2, t = infer ctx r in
             `And (c1, c2), t
+
         | E.Assign (l, r) ->
             let c1, t = infer ctx l in
             let c2, t' = infer ctx r in
             `And (c1, `And (c2, `Eq (t, t'))), t
+
         | E.Binop (l, r) ->
             let c1, t1 = infer ctx l in
             let c2, t2 = infer ctx r in
             `And (c1, `And (c2, `And (`Eq (t1, `Int), `Eq (t2, `Int)))), `Int
+
         | E.Call (f, xs) ->
             let c, t = infer ctx f in
             let cts = List.map (infer ctx) xs in
             let c = List.fold_left (fun c (c', _) -> `And (c, c')) c cts in
             let s = new_tv () in
             `And (c, `Call (t, List.map snd cts, s)), s
+
         | E.Subscript (x, i) ->
             let c1, t1 = infer ctx x in
             let c2, t2 = infer ctx i in
             let s = new_tv () in
             `And (c1, `And (c2, `And (`Eq (t2, `Int), `Ind (t1, s)))), s
+
         | E.Name x -> `Top, Context.find x ctx
         | E.Int 0 -> `Top, new_tv ()
         | E.Int _ -> `Top, `Int
@@ -468,17 +602,18 @@ module Type = struct
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
             let c, t = infer ctx' b in
-            let c, s = simplify c in
-            let sf = subst_map_to_fun s in
-            let fvs = ftv_context @@ Context.map (subst_t sf IS.empty) ctx in
-            let subst_t' = subst_t sf IS.empty in
+
+            let c, s = simplify (ftv_context ctx) c in
+
+            let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
+            let fvs = ftv_context @@ Context.map subst_t' ctx in
             let ts = List.map subst_t' @@ List.map snd xts in
             let t = subst_t' t in
 
             (* TODO maybe convert to de Brujne notation to simplify alpha-equality check? *)
 
             (*
-            (* naive approach *)
+            (* naïve approach *)
             let all_tvs = ftv IS.empty t in
             let all_tvs = ftv_c all_tvs c in
             let all_tvs = List.fold_left ftv all_tvs ts in
@@ -486,32 +621,38 @@ module Type = struct
             *)
 
             let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
-            let (bvs, bc, fc) = split_c signature_tvs fvs c in
+            let bvs, bc, fc = split_c signature_tvs fvs c in
             fc, `Arrow (bvs, bc, ts, t)
+
         | E.Skip -> `Top, new_tv ()
         | E.Array xs ->
             let css = List.map (infer ctx) xs in
             let t = new_tv () in
             let c = List.fold_left (fun c (c', s) -> `And (c, `And (`Eq (t, s), c'))) `Top css in
             c, `Array t
+
         | E.Sexp (x, xs) ->
             let css = List.map (infer ctx) xs in
             let c = List.fold_left (fun c (c', _) -> `And (c, c')) `Top css in
             let t = new_tv () in
             `And (c, `Sexp (x, t, List.map snd css)), t
+
         | E.If (c, t, f) ->
             let c1, _ = infer ctx c in
             let c2, t = infer ctx t in
             let c3, t' = infer ctx f in
             `And (c1, `And (c2, `And (c3, `Eq (t, t')))), t
+
         | E.While (c, b) ->
             let c1, _ = infer ctx c in
             let c2, _ = infer ctx b in
             `And (c1, c2), new_tv ()
+
         | E.DoWhile (b, c) ->
             let c1, _ = infer ctx b in
             let c2, _ = infer ctx c in
             `And (c1, c2), new_tv ()
+
         | E.Case (x, bs) ->
             let c, t = infer ctx x in
             let s = new_tv () in
@@ -529,6 +670,7 @@ module Type = struct
         | E.Var (x, v) ->
             let c, t = infer ctx v in
             `And (c, `Eq (Context.find x ctx, t))
+
         | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
 
         and infer_decls ctx ds =
@@ -539,6 +681,8 @@ module Type = struct
         in
 
         object
+
+            method simplify = simplify
 
             method pattern = infer_p
             method term = infer
