@@ -232,6 +232,10 @@ module Type = struct
         let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
         Subst.union (fun _ -> failwith "duplicated variables in substitution") s s'
 
+    let unfold_mu = function
+    | `Mu (x, t) as t' -> subst_t (subst_map_to_fun @@ Subst.singleton x t') IS.empty t
+    | t -> t
+
     (* list of constraints without And and Top *)
 
     let list_c =
@@ -457,6 +461,8 @@ module Type = struct
              * 2. After that we have flatten constraint but with Eq and maybe unbound constraints
              *    so we need to simplify constraints (including Eq elimination so we got
              *    substituion) and split them on bound and free (got new free constraints)
+             *
+             * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
              *)
             and flatten_recursive_calls =
                 let rec rcf x has_rc changed : c -> c = function

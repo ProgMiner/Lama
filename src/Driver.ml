@@ -245,10 +245,10 @@ let[@ocaml.warning "-32"] main =
 
             let subst = S.solve c in
 
-            print_endline @@ "Substitution: " ^ S.Subst.fold (fun v t acc ->
+            print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
                 let t = T.Type.show_t t in
                 if acc = ""
-                then Printf.sprintf "{ tv_%d -> %s" v t
+                then Printf.sprintf "tv_%d -> %s" v t
                 else Printf.sprintf "%s; tv_%d -> %s" acc v t
             ) subst "" ^ " }";
 
