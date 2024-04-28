@@ -241,7 +241,7 @@ module Type = struct
     let list_c =
         let rec list_c acc = function
         | `Top -> acc
-        | `And (l, r) -> list_c (list_c acc l) r
+        | `And (l, r) -> list_c (list_c acc r) l
         | c -> c :: acc
         in list_c []
 
@@ -261,6 +261,10 @@ module Type = struct
         | `Eq _, `Eq _ -> 0
         | `Sexp _, `Sexp _ -> 0
         | `Ind _, `Ind _ -> 0
+        (* solver doesn't invent complex arrows so try to get them from another calls *)
+        | `Call (`Name x, _, _), `Call (`Name y, _, _) -> Int.compare x y
+        | `Call _, `Call (`Name _, _, _) -> -1
+        | `Call (`Name _, _, _), `Call _ -> 1
         | `Call _, `Call _ -> 0
         | `Match _, `Match _ -> 0
         | `Eq _, _ -> -1
@@ -275,7 +279,7 @@ module Type = struct
         | _, `Match _ -> 1
         in
 
-        List.sort cmp cs
+        List.stable_sort cmp cs
 
     (* solve syntax equality constraints using Robinson's alogrithm *)
 
@@ -413,15 +417,14 @@ module Type = struct
 
                 let s, c = unify_c c in
                 let s, c = apply_rcf s c in
-                let c = sort_cs c in
 
                 (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
                 let c = list_c @@ subst_c (subst_map_to_fun s) IS.empty @@ c_list c in
 
                 (* preserve Eq for free variables *)
-                let eqs = Seq.filter (fun (x, t) -> IS.mem x fvs) @@ Subst.to_seq s in
+                let eqs = Seq.filter (fun (x, _) -> IS.mem x fvs) @@ Subst.to_seq s in
                 let eqs = Seq.map (fun x, t -> `Eq (`Name x, t)) eqs in
-                let c = List.of_seq eqs @ c in
+                let c = sort_cs @@ List.of_seq eqs @ c in
 
                 c_list c, s
 
