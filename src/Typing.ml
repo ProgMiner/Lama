@@ -416,7 +416,14 @@ module Type = struct
                 let c = sort_cs c in
 
                 (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
-                subst_c (subst_map_to_fun s) IS.empty (c_list c), s
+                let c = list_c @@ subst_c (subst_map_to_fun s) IS.empty @@ c_list c in
+
+                (* preserve Eq for free variables *)
+                let eqs = Seq.filter (fun (x, t) -> IS.mem x fvs) @@ Subst.to_seq s in
+                let eqs = Seq.map (fun x, t -> `Eq (`Name x, t)) eqs in
+                let c = List.of_seq eqs @ c in
+
+                c_list c, s
 
             and apply_rcf fvs s c =
                 let exception Changed in
@@ -463,6 +470,9 @@ module Type = struct
              *    substituion) and split them on bound and free (got new free constraints)
              *
              * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
+             *
+             * TODO it works wrong with variables that must be free because we don't know
+             *      actual FVs that was in place where type was introduced
              *)
             and flatten_recursive_calls =
                 let rec rcf x has_rc changed : c -> c = function
@@ -569,7 +579,6 @@ module Type = struct
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
             let c2, t = infer ctx e in
-            (* TODO apply fixpoint on mutually recursive definitions *)
             `And (c1, c2), t
 
         | E.Seq (l, r) ->
