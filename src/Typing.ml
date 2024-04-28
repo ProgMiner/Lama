@@ -416,7 +416,7 @@ module Type = struct
                 let c = list_c c in
 
                 let s, c = unify_c c in
-                let s, c = apply_rcf s c in
+                let s, c = apply_rcf_rce s c in
 
                 (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
                 let c = list_c @@ subst_c (subst_map_to_fun s) IS.empty @@ c_list c in
@@ -428,7 +428,7 @@ module Type = struct
 
                 c_list c, s
 
-            and apply_rcf s c =
+            and apply_rcf_rce s c =
                 let exception Changed in
 
                 let new_c = Stdlib.ref c in
@@ -443,18 +443,41 @@ module Type = struct
                         Printf.printf "Recursive calls flattened in tv_%d:\n" x ;
                         Printf.printf "  Before: %s\n" (show_t t) ;
                         Printf.printf "  After : %s\n" (show_t t') ;
+
+                        let t = t' in
+                        let Some (t', s') = eliminate_recursive_calls new_c t in
+
+                        let s = !new_s in
+                        let s = Subst.add x t' s in
+                        new_s := subst_concat s s' ;
+
+                        Printf.printf "Recursive calls eliminated in tv_%d:\n" x ;
+                        Printf.printf "  Before: %s\n" (show_t t) ;
+                        Printf.printf "  After : %s\n" (show_t t') ;
+
                         raise Changed
 
-                    | None -> ()
+                    | None -> match eliminate_recursive_calls new_c t with
+                        | Some (t', s') -> (* TODO move to another function *)
+                            let s = Subst.add x t' s in (* s == !new_s *)
+                            new_s := subst_concat s s' ;
+
+                            Printf.printf "Recursive calls eliminated in tv_%d:\n" x ;
+                            Printf.printf "  Before: %s\n" (show_t t) ;
+                            Printf.printf "  After : %s\n" (show_t t') ;
+
+                            raise Changed
+
+                        | None -> ()
                     ) s ;
 
                     s, c
 
-                with Changed -> apply_rcf !new_s !new_c
+                with Changed -> apply_rcf_rce !new_s !new_c
 
             (* recursive calls flattening
              *
-             * Given type of form (mu x. \/xs. C => (ts) -> t), free variables set (of context)
+             * Given type of form (mu x. \/xs. C => (ts) -> t)
              *
              * 1. Recursively traverse constraints (only in Call(Arrow(...), ...)) from down to up
              *   a) If there isn't Call(x, ...), keep in untouched
@@ -472,7 +495,7 @@ module Type = struct
              *    so we need to simplify constraints (including Eq elimination so we got
              *    substituion) and split them on bound and free (got new free constraints)
              *
-             * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
+             * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...)) !!!
              *)
             and flatten_recursive_calls =
                 let rec rcf x has_rc changed : c -> c = function
@@ -522,11 +545,9 @@ module Type = struct
                         let fvs = ftv IS.empty t' in
 
                         let c, s = simplify fvs @@ c_list c in
-
                         if Subst.mem x s then failwith "recursive variable unified" ;
 
                         let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
-                        let fvs = IS.filter (fun fv -> not @@ Subst.mem fv s) fvs in
                         let ts = List.map subst_t' ts in
                         let t = subst_t' t in
 
@@ -537,6 +558,68 @@ module Type = struct
 
                         (* we don't eliminate recursion at all so x must present in bc *)
                         Some (`Mu (x, `Arrow (bvs, bc, ts, t)), s)
+
+                    else None
+
+                | _ -> None
+
+            (* recursive calls elimination
+             *
+             * Given type of form (mu x. \/xs. C => (ts) -> t)
+             *
+             * 1. Traverse constraints (non recursively) and for each Call(x, taus, tau)
+             *    replace it with Eq:
+             *
+             *    x, ts, t |-rce- Call(x, taus, tau) => Eq(taus_i, ts_i) /\ Eq(tau, t)
+             *
+             * 2. After that we have constraints without recursive Call but with Eq that could be
+             *    unbound so we need to simplify them and split as in RCF pass
+             *
+             * That algorithm is only correct for non-polymorphic recursion but polymorphic
+             * recursion is provably undecidable so we don't try to infer it at all
+             *)
+            and eliminate_recursive_calls =
+                let rce x ts t changed : c -> c = function
+                | `Call (`Name y, taus, tau) when x = y ->
+                    if List.length ts <> List.length taus then failwith @@ Printf.sprintf
+                        "wrong number of arguments in call (%d expected but %d given)"
+                        (List.length ts) (List.length taus) ;
+
+                    let eqs = List.map2 (fun t tau -> `Eq (t, tau)) (t :: ts) (tau :: taus) in
+                    let eqs = c_list eqs in
+
+                    changed := true ;
+                    eqs
+
+                | c -> c
+                in
+
+                fun new_c : (t -> (t * t Subst.t) option) -> function
+                | `Mu (x, (`Arrow (_, c, ts, t) as t')) ->
+                    let changed = Stdlib.ref false in
+
+                    let c = List.map (rce x ts t changed) @@ list_c c in
+
+                    if !changed then
+                        (* essential FVs at the moment when Arrow was introduced *)
+                        let fvs = ftv IS.empty t' in
+
+                        let c, s = simplify fvs @@ c_list c in
+                        if Subst.mem x s then failwith "recursive variable unified" ;
+
+                        let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
+                        let ts = List.map subst_t' ts in
+                        let t = subst_t' t in
+
+                        let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+                        let bvs, bc, fc = split_c signature_tvs fvs c in
+
+                        new_c := list_c fc @ !new_c ;
+
+                        let t' = `Arrow (bvs, bc, ts, t) in
+                        let t' = if IS.mem x @@ ftv_c IS.empty bc then `Mu (x, t') else t' in
+
+                        Some (t', s)
 
                     else None
 
