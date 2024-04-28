@@ -225,11 +225,17 @@ module Type = struct
     | `Match (t, ps) -> `Match (subst_t f bvs t, List.map (subst_p f bvs) ps)
     | `Sexp (x, t, ts) -> `Sexp (x, subst_t f bvs t, List.map (subst_t f bvs) ts)
 
-    let subst_map_to_fun s x = Option.value (Subst.find_opt x s) ~default:(`Name x)
+    let subst_map_to_fun s =
+        let rec walk x = match Subst.find_opt x s with
+        | Some (`Name x) -> walk x
+        | Some t -> subst_t walk IS.empty t
+        | None -> `Name x
+        in
 
-    (* applies s' to s and adds bindings from s' to s, s' mustn't include bindings of s *)
+        walk
+
+    (* adds bindings from s' to s, s' mustn't include bindings of s *)
     let subst_concat s s' =
-        let s = Subst.map (subst_t (subst_map_to_fun s') IS.empty) s in
         Subst.union (fun _ -> failwith "duplicated variables in substitution") s s'
 
     let unfold_mu = function
@@ -281,7 +287,7 @@ module Type = struct
 
         List.stable_sort cmp cs
 
-    (* solve syntax equality constraints using Robinson's alogrithm *)
+    (* unification of types, returns triangular substitution *)
 
     let rec unify : t * t -> _ = function
     | (`Name x, `Name y) when x == y -> Subst.empty
@@ -302,6 +308,8 @@ module Type = struct
     | (`Mu _, _) -> failwith "mu-s equality occurred" (* TODO *)
     | (_, `Mu _) -> failwith "mu-s equality occurred" (* TODO *)
     | (l, r) -> failwith @@ Printf.sprintf "cannot unify %s with %s" (show_t l) (show_t r)
+
+    (* solve syntax equality constraints using unification *)
 
     let unify_c =
         let f (s, res) = function
@@ -408,6 +416,7 @@ module Type = struct
          * Applies following passes:
          * 1. Eq elimination (eliminate Eq(t1, t2) by unification of t1 = t2)
          * 2. Recursive calls flattening (convert mutual recursive Calls into direct recursive Calls)
+         * 3. Recursive calls elimination (eliminate direct recursive Calls)
          *)
         (* TODO simplify better *)
 
@@ -495,7 +504,7 @@ module Type = struct
              *    so we need to simplify constraints (including Eq elimination so we got
              *    substituion) and split them on bound and free (got new free constraints)
              *
-             * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...)) !!!
+             * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
              *)
             and flatten_recursive_calls =
                 let rec rcf x has_rc changed : c -> c = function
