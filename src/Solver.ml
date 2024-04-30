@@ -480,6 +480,13 @@ type match_t_res =
 let rec match_t t p (res : match_t_res Option.groundi) =
     let some = Option.some in
 
+    let rec wildcard_sexp_hlp ts tps = ocanren
+        { ts == [] & tps == []
+        | fresh t, ts', tps' in ts == t :: ts' & tps == (t, PWildcard) :: tps'
+            & wildcard_sexp_hlp ts' tps'
+        }
+    in
+
     let rec array_hlp t ps res = ocanren
         { ps == [] & res == []
         | fresh p, ps', res' in ps == p :: ps' & res == (t, p) :: res' & array_hlp t ps' res'
@@ -513,7 +520,29 @@ let rec match_t t p (res : match_t_res Option.groundi) =
     *)
 
     ocanren
-    { p == PWildcard & res == some ([], []) (* MT-Wildcard *)
+    { p == PWildcard &
+        { t == TName _ & res == some ([], []) (* MT-WildcardVar *)
+        | t =/= TName _ &
+            { t == TInt & res == some ([], []) (* MT-WildcardInt *)
+            | t =/= TInt &
+                { t == TString & res == some ([], []) (* MT-WildcardString *)
+                | t =/= TString &
+                    { { fresh t' in t == TArray t & res == some ([(t', PWildcard)], []) } (* MT-WildcardArray *)
+                    | t =/= TArray _ &
+                        { { fresh ts, tps in t == TSexp [(_, ts)] & res == some (tps, [])
+                            & wildcard_sexp_hlp ts tps } (* MT-WildcardSexp *)
+                        | t =/= TSexp _ &
+                            { t == TArrow (_, _, _, _) & res == some ([], []) (* MT-WildcardFun *)
+                            | t =/= TArrow (_, _, _, _) &
+                                { t == TMu (_, _) & res == some ([], []) (* hack for Mu *)
+                                | t =/= TMu (_, _) & res == None
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     | { fresh s, p', res' in p == PTyped (s, p') & match_t t p' res' &
         { res' == None & res == None
         | fresh ps, eqs in res' == some (ps, eqs) & res == some (ps, (t, s) :: eqs) (* MT-Typed *)
@@ -532,10 +561,11 @@ let rec match_t t p (res : match_t_res Option.groundi) =
     | p == PBoxed &
         { t == TString & res == some ([], []) (* MT-BoxString *)
         | t =/= TString &
-            { t == TArray _ & res == some ([], []) (* MT-BoxArray *)
+            { { fresh t' in t == TArray t' & res == some ([(t', PWildcard)], []) } (* MT-BoxArray *)
             | t =/= TArray _ &
-                { t == TSexp [_] & res == some ([], []) (* MT-BoxSexp *)
-                | t =/= TSexp [_] &
+                { { fresh ts, tps in t == TSexp [(_, ts)] & res == some (tps, [])
+                    & wildcard_sexp_hlp ts tps } (* MT-BoxSexp *)
+                | t =/= TSexp _ &
                     { t == TArrow (_, _, _, _) & res == some ([], []) (* MT-BoxArrow *)
                     | t =/= TArrow (_, _, _, _) & res == None
                     }
@@ -551,12 +581,13 @@ let rec match_t t p (res : match_t_res Option.groundi) =
         | t =/= TString & res == None
         }
     | p == PArrayTag &
-        { t == TArray _ & res == some ([], []) (* MT-ArrayShape *)
+        { { fresh t' in t == TArray t' & res == some ([(t', PWildcard)], []) } (* MT-ArrayShape *)
         | t =/= TArray _ & res == None
         }
     | p == PSexpTag &
-        { t == TSexp [_] & res == some ([], []) (* MT-SexpShape *)
-        | t =/= TSexp [_] & res == None
+        { { fresh ts, tps in t == TSexp [(_, ts)] & res == some (tps, [])
+            & wildcard_sexp_hlp ts tps } (* MT-SexpShape *)
+        | t =/= TSexp _ & res == None
         }
     | p == PFunTag &
         { t == TArrow (_, _, _, _) & res == some ([], []) (* MT-FunShape *)
@@ -680,6 +711,9 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh t, xs, ps in c' == CMatch (t, ps) & unmu t (TSexp xs) & match_sexp_hlp c xs ps } (* C-MatchSexp *)
     | { fresh f, fxs, fc, fts, ft, ps in c' == CMatch (f, ps) & unmu f (TArrow (fxs, fc, fts, ft))
         & match_t_ast c (TArrow (fxs, fc, fts, ft)) ps } (* C-MatchFun *)
+    (* | { fresh x, ps in c' == CMatch (TName x, ps) & is_not_var x & match_t_ast c (TName x) ps } (* hack for Mu *) *)
+    | { fresh x, t, ps in c' == CMatch (TMu (x, t), ps) & is_not_var x
+        & match_t_ast c (TMu (x, t)) ps } (* hack for Mu *)
     | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs) & sexp_x_hlp x xs ts } (* C-Sexp *)
     }
 
