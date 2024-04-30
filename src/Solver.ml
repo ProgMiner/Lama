@@ -109,32 +109,32 @@ and injected_lama_c =
     ) lama_c ilogic
 
 
-let tName x = OCanren.inj (TName x)
-let tInt () = OCanren.inj TInt
-let tString () = OCanren.inj TString
-let tArray t = OCanren.inj (TArray t)
-let tSexp xs = OCanren.inj (TSexp xs)
-let tArrow xs c ts t = OCanren.inj (TArrow (xs, c, ts, t))
-let tMu x t = OCanren.inj (TMu (x, t))
+let tName x = inj (TName x)
+let tInt () = inj TInt
+let tString () = inj TString
+let tArray t = inj (TArray t)
+let tSexp xs = inj (TSexp xs)
+let tArrow xs c ts t = inj (TArrow (xs, c, ts, t))
+let tMu x t = inj (TMu (x, t))
 
-let pWildcard () = OCanren.inj PWildcard
-let pTyped t p = OCanren.inj (PTyped (t, p))
-let pArray ps = OCanren.inj (PArray ps)
-let pSexp x ps = OCanren.inj (PSexp (x, ps))
-let pBoxed () = OCanren.inj PBoxed
-let pUnboxed () = OCanren.inj PUnboxed
-let pStringTag () = OCanren.inj PStringTag
-let pArrayTag () = OCanren.inj PArrayTag
-let pSexpTag () = OCanren.inj PSexpTag
-let pFunTag () = OCanren.inj PFunTag
+let pWildcard () = inj PWildcard
+let pTyped t p = inj (PTyped (t, p))
+let pArray ps = inj (PArray ps)
+let pSexp x ps = inj (PSexp (x, ps))
+let pBoxed () = inj PBoxed
+let pUnboxed () = inj PUnboxed
+let pStringTag () = inj PStringTag
+let pArrayTag () = inj PArrayTag
+let pSexpTag () = inj PSexpTag
+let pFunTag () = inj PFunTag
 
-let cTop () = OCanren.inj CTop
-let cAnd c1 c2 = OCanren.inj (CAnd (c1, c2))
-let cEq t1 t2 = OCanren.inj (CEq (t1, t2))
-let cInd t s = OCanren.inj (CInd (t, s))
-let cCall t ss s = OCanren.inj (CCall (t, ss, s))
-let cMatch t ps = OCanren.inj (CMatch (t, ps))
-let cSexp x t ss = OCanren.inj (CSexp (x, t, ss))
+let cTop () = inj CTop
+let cAnd c1 c2 = inj (CAnd (c1, c2))
+let cEq t1 t2 = inj (CEq (t1, t2))
+let cInd t s = inj (CInd (t, s))
+let cCall t ss s = inj (CCall (t, ss, s))
+let cMatch t ps = inj (CMatch (t, ps))
+let cSexp x t ss = inj (CSexp (x, t, ss))
 
 let reify_lama_t
     (reify_lama_c : (injected_lama_t, logic_lama_t) Reifier.t
@@ -287,6 +287,60 @@ and logic_lama_c_to_ground : logic_lama_c -> ground_lama_c = function
     logic_lama_t_to_ground
     (logic_list_to_ground logic_lama_p_to_ground)
     x
+
+let logic_to_injected (vars : term_vars) = function
+| Var (v, _) -> vars.get v
+| Value x -> inj x
+
+let rec logic_list_to_injected (vars : term_vars) (f : 'a -> 'b)
+    : 'a List.logic -> 'b List.injected = function
+| Var (v, _) -> vars.get v
+| Value x -> inj @@ GT.gmap List.t f (logic_list_to_injected vars f) x
+
+let rec logic_lama_t_to_injected (vars : term_vars) : logic_lama_t -> injected_lama_t = function
+| Var (v, _) -> vars.get v
+| Value x -> inj @@ GT.gmap lama_t
+    (logic_to_injected vars)
+    (logic_list_to_injected vars @@ logic_to_injected vars)
+    (logic_lama_c_to_injected vars)
+    (logic_list_to_injected vars @@ logic_lama_t_to_injected vars)
+    (logic_lama_t_to_injected vars)
+    (logic_list_to_injected vars @@ logic_sexp_to_injected vars)
+    x
+
+and logic_sexp_to_injected (vars : term_vars)
+    : (int logic * logic_lama_t List.logic) logic
+    -> (int ilogic * injected_lama_t List.injected) ilogic
+= function
+| Var (v, _) -> vars.get v
+| Value (x, ts) -> inj ( logic_to_injected vars x
+                       , logic_list_to_injected vars (logic_lama_t_to_injected vars) ts
+                       )
+
+and logic_lama_p_to_injected (vars : term_vars) : logic_lama_p -> injected_lama_p = function
+| Var (v, _) -> vars.get v
+| Value x -> inj @@ GT.gmap lama_p
+    (logic_lama_t_to_injected vars)
+    (logic_lama_p_to_injected vars)
+    (logic_list_to_injected vars @@ logic_lama_p_to_injected vars)
+    (logic_to_injected vars)
+    x
+
+and logic_lama_c_to_injected (vars : term_vars) : logic_lama_c -> injected_lama_c = function
+| Var (v, _) -> vars.get v
+| Value x -> inj @@ GT.gmap lama_c
+    (logic_lama_c_to_injected vars)
+    (logic_to_injected vars)
+    (logic_list_to_injected vars @@ logic_lama_t_to_injected vars)
+    (logic_lama_t_to_injected vars)
+    (logic_list_to_injected vars @@ logic_lama_p_to_injected vars)
+    x
+
+let occurs_hook_lama_t vars v =
+    let get_var u = if v = u then Obj.magic @@ tName v else vars.get u in
+    fun t -> tMu !!v @@ logic_lama_t_to_injected { get = get_var } t
+
+let set_occurs_hook_lama_t t = bind_occurs_hook t reify_lama_t occurs_hook_lama_t
 
 (* res <=> exists i. xs[i] = x *)
 let rec list_member (x : 'a) (xs : 'a List.injected) (res : bool ilogic) = ocanren
@@ -563,10 +617,17 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
         }
     } in
 
+    let rec ts_eq ts ts' = ocanren
+        { ts == [] & ts' == []
+        | fresh t, ts1, ts1' in set_occurs_hook_lama_t t (* order of (==) is matter *)
+            & ts' == t :: ts1' & ts == t :: ts1 & ts_eq ts1 ts1'
+        }
+    in
+
     (* require that xs contains exactly one label x with correct types *)
     let rec hlp n xs = let n' = n + 1 in ocanren { check_n n &
         { fresh x', ts', xs' in xs == (x', ts') :: xs' &
-            { x == x' & ts == ts' & not_in_tail n' xs'
+            { x == x' & ts_eq ts ts' & not_in_tail n' xs'
             | is_not_var x' & x =/= x' & hlp n' xs'
             }
         }
@@ -577,10 +638,11 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
 (* unfolds Mu in t if t is exactly Mu in current state *)
 let unmu t t' =
     (*
-    debug_var t (Fun.flip reify_lama_t) (fun ts ->
-        Printf.printf "unmu: %s" (GT.show GT.list (GT.show logic_lama_t) ts) ;
-        print_newline () ;
-        success) &&&
+    debug_var t (Fun.flip reify_lama_t) (fun t ->
+        debug_var t' (Fun.flip reify_lama_t) (fun t' ->
+            Printf.printf "unmu: %s ~ %s" (GT.show GT.list (GT.show logic_lama_t) t) (GT.show GT.list (GT.show logic_lama_t) t') ;
+            print_newline () ;
+            success)) &&&
     *)
     ocanren
     { is_var t & t == t'
