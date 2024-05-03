@@ -589,6 +589,9 @@ let rec make_subst xs res = ocanren
     | fresh x, t, xs', res' in xs == x :: xs' & res == (x, t) :: res' & make_subst xs' res'
     }
 
+let sexp_max_length = Stdlib.ref Int.max_int
+let sexp_max_args = Stdlib.ref Int.max_int
+
 type match_t_res =
     ( (injected_lama_t, injected_lama_p) Pair.injected List.injected
     , (injected_lama_t, injected_lama_t) Pair.injected List.injected
@@ -598,11 +601,19 @@ type match_t_res =
 let rec match_t t p (res : match_t_res Option.groundi) =
     let some = Option.some in
 
-    let rec wildcard_sexp_hlp ts tps = ocanren
-        { ts == [] & tps == []
-        | fresh t, ts', tps' in ts == t :: ts' & tps == (t, PWildcard) :: tps'
-            & wildcard_sexp_hlp ts' tps'
-        }
+    let wildcard_sexp_hlp =
+        let max_args = !sexp_max_args in
+
+        let check_n n = if n > max_args then failure else success in
+
+        let rec wildcard_sexp_hlp n ts tps = let n' = n + 1 in ocanren { check_n n &
+            { ts == [] & tps == []
+            | fresh t, ts', tps' in ts == t :: ts' & tps == (t, PWildcard) :: tps'
+                & wildcard_sexp_hlp n' ts' tps'
+            }
+        } in
+
+        wildcard_sexp_hlp 0
     in
 
     let rec array_hlp t ps res = ocanren
@@ -713,9 +724,6 @@ let rec match_t t p (res : match_t_res Option.groundi) =
         }
     }
 
-let sexp_max_length = Stdlib.ref Int.max_int
-let sexp_max_args = Stdlib.ref Int.max_int
-
 let ind_sexp_hlp xs (t : injected_lama_t) : goal =
     let max_length = !sexp_max_length in
     let max_args = !sexp_max_args in
@@ -819,7 +827,7 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
     | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
     | { fresh t, t', ps in c' == CMatch (t, ps) & unmu t (TArray t') & match_t_ast c (TArray t') ps } (* C-MatchArray *)
-    | { fresh t, xs, ps in c' == CMatch (t, ps) & unmu t (TSexp xs) & match_sexp_hlp c xs ps } (* C-MatchSexp *)
+    | { fresh t, xs, ps in c' == CMatch (t, ps) & unmu t (TSexp xs) & match_sexp_hlp c ps xs } (* C-MatchSexp *)
     | { fresh f, fxs, fc, fts, ft, ps in c' == CMatch (f, ps) & unmu f (TArrow (fxs, fc, fts, ft))
         & match_t_ast c (TArrow (fxs, fc, fts, ft)) ps } (* C-MatchFun *)
     (* | { fresh x, ps in c' == CMatch (TName x, ps) & is_not_var x & match_t_ast c (TName x) ps } (* hack for Mu *) *)
@@ -828,12 +836,20 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs) & sexp_x_hlp x xs ts } (* C-Sexp *)
     }
 
-and match_sexp_hlp c xs ps = ocanren
-    { xs == []
-    | fresh xts, xs' in xs == xts :: xs'
-        & match_t_ast c (TSexp [xts]) ps
-        & match_sexp_hlp c xs' ps
-    }
+and match_sexp_hlp c ps =
+    let max_length = !sexp_max_length in
+
+    let check_n n = if n > max_length then failure else success in
+
+    let rec hlp n xs = let n' = n + 1 in ocanren { check_n n &
+        { xs == []
+        | fresh xts, xs' in xs == xts :: xs'
+            & match_t_ast c (TSexp [xts]) ps
+            & hlp n' xs'
+        }
+    } in
+
+    hlp 0
 
 (* assumes that t is not Mu *)
 and match_t_ast c t ps =
