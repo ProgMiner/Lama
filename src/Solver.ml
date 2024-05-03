@@ -527,7 +527,7 @@ let rec match_t t p (res : match_t_res Option.groundi) =
             | t =/= TInt &
                 { t == TString & res == some ([], []) (* MT-WildcardString *)
                 | t =/= TString &
-                    { { fresh t' in t == TArray t & res == some ([(t', PWildcard)], []) } (* MT-WildcardArray *)
+                    { { fresh t' in t == TArray t' & res == some ([(t', PWildcard)], []) } (* MT-WildcardArray *)
                     | t =/= TArray _ &
                         { { fresh ts, tps in t == TSexp [(_, ts)] & res == some (tps, [])
                             & wildcard_sexp_hlp ts tps } (* MT-WildcardSexp *)

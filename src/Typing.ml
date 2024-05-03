@@ -279,10 +279,10 @@ module Type = struct
         | _, `Sexp _ -> 1
         | `Ind _, _ -> -1
         | _, `Ind _ -> 1
-        | `Call _, _ -> -1
-        | _, `Call _ -> 1
-        | `Match _, _ -> -1
-        | _, `Match _ -> 1
+        | `Call _, _ -> 0
+        | _, `Call _ -> 0
+        | `Match _, _ -> 0
+        | _, `Match _ -> 0
         in
 
         List.stable_sort cmp cs
@@ -773,7 +773,7 @@ module Type = struct
             in
 
             let c, ps = List.fold_left f (c, []) bs in
-            `And (c, `Match (t, List.rev ps)), s
+            `And (`Match (t, List.rev ps), c), s
 
         and infer_decl ctx = function
         | E.Var (x, v) ->
@@ -786,7 +786,7 @@ module Type = struct
             let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
             let ctx = List.fold_left f ctx ds in
 
-            List.fold_left (fun c d -> `And (c, infer_decl ctx d)) `Top ds, ctx
+            List.fold_left (fun c d -> `And (infer_decl ctx d, c)) `Top ds, ctx
         in
 
         object
