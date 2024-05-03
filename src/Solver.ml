@@ -368,10 +368,128 @@ let rec group_by_fst kvs res = ocanren
         & group_by_fst kvs'' res'
     }
 
+let rec eq_list eq xs xs' = ocanren
+    { xs == xs'
+    | xs =/= xs' &
+        { is_var xs & is_var     xs' & xs == xs'
+        | is_var xs & is_not_var xs' &
+            { xs' == [] & xs == xs'
+            | fresh x, x', xs1, xs1' in xs' == x' :: xs1' & xs == x :: xs1
+                & eq x x' & eq_list eq xs1 xs1'
+            }
+        | is_not_var xs &
+            { xs == [] & xs == xs'
+            | fresh x, x', xs1, xs1' in xs == x :: xs1 & xs' == x' :: xs1'
+                & eq x x' & eq_list eq xs1 xs1'
+            }
+        }
+    }
+
+let rec eq_t t t' = ocanren
+    { t == t'
+    | t =/= t' &
+        { is_var     t & is_var     t' & t == t'
+        | is_var     t & is_not_var t' & set_occurs_hook_lama_t t  & t == t'
+        | is_not_var t & is_var     t' & set_occurs_hook_lama_t t' & t == t'
+        | is_not_var t & is_not_var t' &
+            { t == TName _ & t == t'
+            | t == TInt    & t == t'
+            | t == TString & t == t'
+            | { fresh t1, t1' in t == TArray t1 & t' == TArray t1' & eq_t t1 t1' }
+            | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & eq_sexp_hlp xs xs' }
+            | { fresh xs, c, c', ts, ts', t1, t1' in t == TArrow (xs, c, ts, t1)
+                & t' == TArrow (xs, c', ts', t1') & eq_c c c' & eq_t_list ts ts' & eq_t t1 t' }
+            | { fresh x, t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1') & eq_t t1 t1' }
+            }
+        }
+    }
+
+and eq_sexp_hlp =
+    let hlp xts xts' = ocanren {
+        fresh x, ts, ts' in xts == (x, ts) & xts' == (x, ts') & eq_t_list ts ts'
+    } in
+
+    fun xs xs' -> eq_list hlp xs xs'
+
+and eq_t_list ts ts' = eq_list eq_t ts ts'
+
+and eq_p p p' = ocanren
+    { p == p'
+    | p =/= p' &
+        { is_var p & is_var p' & p == p'
+        | is_var p & is_not_var p' &
+            { p' == PWildcard & p == p'
+            | { fresh t, t', p1, p1' in p' == PTyped (t', p1') & p == PTyped (t, p1)
+                & eq_t t t' & eq_p p1 p1' }
+            | { fresh ps, ps' in p' == PArray ps' & p == PArray ps & eq_list eq_p ps ps' }
+            | { fresh x, ps, ps' in p' == PSexp (x, ps') & p == PSexp (x, ps) & eq_list eq_p ps ps' }
+            | p' == PBoxed & p == p'
+            | p' == PUnboxed & p == p'
+            | p' == PStringTag & p == p'
+            | p' == PArrayTag & p == p'
+            | p' == PSexpTag & p == p'
+            | p' == PFunTag & p == p'
+            }
+        | is_not_var p &
+            { p == PWildcard & p == p'
+            | { fresh t, t', p1, p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
+                & eq_t t t' & eq_p p1 p1' }
+            | { fresh ps, ps' in p == PArray ps & p' == PArray ps' & eq_list eq_p ps ps' }
+            | { fresh x, ps, ps' in p == PSexp (x, ps) & p' == PSexp (x, ps') & eq_list eq_p ps ps' }
+            | p == PBoxed & p == p'
+            | p == PUnboxed & p == p'
+            | p == PStringTag & p == p'
+            | p == PArrayTag & p == p'
+            | p == PSexpTag & p == p'
+            | p == PFunTag & p == p'
+            }
+        }
+    }
+
+and eq_c c c' = ocanren
+    { c == c'
+    | c =/= c' &
+        { is_var c & is_var     c' & c == c'
+        | is_var c & is_not_var c' &
+            { c' == CTop & c == c'
+            | { fresh c1, c1', c2, c2' in c' == CAnd (c1', c2') & c == CAnd (c1, c2)
+                & eq_c c1 c1' & eq_c c2 c2' }
+            | { fresh t1, t1', t2, t2' in c' == CEq (t1', t2') & c == CEq (t1, t2)
+                & eq_t t1 t1' & eq_t t2 t2' }
+            | { fresh t1, t1', t2, t2' in c' == CInd (t1', t2') & c == CInd (t1, t2)
+                & eq_t t1 t1' & eq_t t2 t2' }
+            | { fresh t1, t1', ts, ts', t2, t2' in c' == CCall (t1', ts', t2')
+                & c == CCall (t1, ts, t2) & eq_t t1 t1' & eq_t t2 t2' & eq_t_list ts ts' }
+            | { fresh t1, t1', ps, ps' in c' == CMatch (t1', ps') & c == CMatch (t1, ps)
+                & eq_t t1 t1' & eq_list eq_p ps ps' }
+            | { fresh x, t1, t1', ts, ts' in c' == CSexp (x, t1', ts') & c == CSexp (x, t1, ts)
+                & eq_t t1 t1' & eq_list eq_t ts ts' }
+            }
+        | is_not_var c &
+            { c == CTop & c == c'
+            | { fresh c1, c1', c2, c2' in c == CAnd (c1, c2) & c' == CAnd (c1', c2')
+                & eq_c c1 c1' & eq_c c2 c2' }
+            | { fresh t1, t1', t2, t2' in c == CEq (t1, t2) & c' == CEq (t1', t2')
+                & eq_t t1 t1' & eq_t t2 t2' }
+            | { fresh t1, t1', t2, t2' in c == CInd (t1, t2) & c' == CInd (t1', t2')
+                & eq_t t1 t1' & eq_t t2 t2' }
+            | { fresh t1, t1', ts, ts', t2, t2' in c == CCall (t1, ts, t2)
+                & c' == CCall (t1', ts', t2') & eq_t t1 t1' & eq_t t2 t2' & eq_t_list ts ts' }
+            | { fresh t1, t1', ps, ps' in c == CMatch (t1, ps) & c' == CMatch (t1', ps')
+                & eq_t t1 t1' & eq_list eq_p ps ps' }
+            | { fresh x, t1, t1', ts, ts' in c == CSexp (x, t1, ts) & c' == CSexp (x, t1', ts')
+                & eq_t t1 t1' & eq_list eq_t ts ts' }
+            }
+        }
+    }
+
+let ( =~= ) = eq_t
+let ( =~~= ) = eq_t_list
+
 let rec subst_v x s t = ocanren
     { s == [] & t == TName x
     | fresh x', t', s' in s == (x', t') :: s' &
-        { x' == x & t == t'
+        { x' == x & t =~= t'
         | x' =/= x & subst_v x s' t
         }
     }
@@ -396,7 +514,7 @@ let rec subst_t s t t' =
                 success))) &&&
     *)
     ocanren
-    { s == [] & t == t'
+    { s == [] & t =~= t'
     | s =/= [] &
         { { fresh x in t == TName x & subst_v x s t' }
         | t == TInt & t' == TInt
@@ -419,7 +537,7 @@ and subst_sexp s xts xts' = ocanren
     }
 
 and subst_p s p p' = ocanren
-    { s == [] & p == p'
+    { s == [] & eq_p p p'
     | s =/= [] &
         { p == PWildcard & p' == PWildcard
         | { fresh t, t', p1, p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
@@ -448,7 +566,7 @@ and subst_c s c c' =
                 success))) &&&
     *)
     ocanren
-    { s == [] & c == c'
+    { s == [] & eq_c c c'
     | s =/= [] &
         { c == CTop & c' == CTop
         | { fresh c1, c1', c2, c2' in c == CAnd (c1, c2) & c' == CAnd (c1', c2')
@@ -606,7 +724,7 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
     let rec hlp n ts = let n' = n + 1 in ocanren { check_n n &
         { ts == []
-        | fresh ts' in ts == t :: ts' & hlp n' ts'
+        | fresh t', ts' in ts == t' :: ts' & t =~= t' & hlp n' ts'
         }
     } in
 
@@ -648,17 +766,10 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
         }
     } in
 
-    let rec ts_eq ts ts' = ocanren
-        { ts == [] & ts' == []
-        | fresh t, ts1, ts1' in set_occurs_hook_lama_t t (* order of (==) is matter *)
-            & ts' == t :: ts1' & ts == t :: ts1 & ts_eq ts1 ts1'
-        }
-    in
-
     (* require that xs contains exactly one label x with correct types *)
     let rec hlp n xs = let n' = n + 1 in ocanren { check_n n &
         { fresh x', ts', xs' in xs == (x', ts') :: xs' &
-            { x == x' & ts_eq ts ts' & not_in_tail n' xs'
+            { x == x' & ts =~~= ts' & not_in_tail n' xs'
             | is_not_var x' & x =/= x' & hlp n' xs'
             }
         }
@@ -697,9 +808,9 @@ let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
     (* | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c2 & c //- c1 } (* C-And *) *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c1 //- c' } (* C-AndL *)
     | { fresh c1, c2 in c == CAnd (c1, c2) & c2 //- c' } (* C-AndR *)
-    (* | { fresh t in c' == CEq (t, t) } *)
+    (* | { fresh t, t' in c' == CEq (t, t') & t =~= t' } *)
     | c' == CInd (TString, TInt) (* C-IndString *)
-    | { fresh t1, t2 in c' == CInd (t1, t2) & unmu t1 (TArray t2) } (* C-IndArray *)
+    | { fresh t1, t1', t2 in c' == CInd (t1, t2) & unmu t1 (TArray t1') & t1' =~= t2 } (* C-IndArray *)
     | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs) & ind_sexp_hlp xs t2 } (* C-IndSexp *)
     | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t) & unmu f (TArrow (fxs, fc, fts, ft))
         & { is_var fxs & fxs == [] | is_not_var fxs } & { is_var fc & fc == CTop | is_not_var fc }
@@ -732,7 +843,7 @@ and match_t_ast c t ps =
 
     let rec eqs_hlp eqs = ocanren
         { eqs == []
-        | fresh t, eqs' in eqs == (t, t) :: eqs' & eqs_hlp eqs'
+        | fresh t, t', eqs' in eqs == (t, t') :: eqs' & t =~= t' & eqs_hlp eqs'
         }
     in
 
