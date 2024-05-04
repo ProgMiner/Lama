@@ -584,6 +584,58 @@ and subst_c s c c' =
         }
     }
 
+let conj_c c1 c2 c = ocanren
+    { c1 == CTop & c == c2
+    | c1 =/= CTop & c2 == CTop & c == c1
+    | c1 =/= CTop & c2 =/= CTop & c == CAnd (c1, c2)
+    }
+
+(* primitive solving scheduler *)
+let schedule =
+    let rec hlp r c c' rest = delay @@ fun () -> ocanren
+        { c == CTop &
+            { r == CTop & c' == CTop & rest == CTop
+            | r =/= CTop & hlp CTop r c' rest
+            }
+        | { fresh c1, c2, r' in c == CAnd (c1, c2) & conj_c c2 r r'
+            & hlp (CAnd (c2, r)) c1 c' rest }
+        | c =/= CTop & c =/= CAnd (_, _) & c' == c & rest == r
+        }
+    in
+
+    ocanren { hlp CTop }
+
+(* solving scheduler *)
+let schedule =
+    let rec hlp l r c c' rest =
+        let continue = ocanren { fresh l' in conj_c l c l' & hlp l' r CTop c' rest } in
+        let return = ocanren { c' == c & conj_c l r rest } in
+
+        delay @@ fun () -> ocanren
+        { c == CTop &
+            { r == CTop & schedule l c' rest (* backing to simple *)
+            | r =/= CTop & hlp l CTop r c' rest
+            }
+        | { fresh c1, c2, r' in c == CAnd (c1, c2) & conj_c c2 r r' & hlp l r' c1 c' rest }
+        | c == CEq (_, _) & return
+        | { fresh t in c == CInd (t, _) &
+            { is_var t & continue
+            | is_not_var t & return
+            } }
+        | { fresh t in c == CCall (t, _, _) &
+            { is_var t & continue
+            | is_not_var t & return
+            } }
+        | { fresh t in c == CMatch (t, _) &
+            { is_var t & continue
+            | is_not_var t & return
+            } }
+        | c == CSexp (_, _, _) & return
+        }
+    in
+
+    ocanren { hlp CTop CTop }
+
 let rec make_subst xs res = ocanren
     { xs == [] & res == []
     | fresh x, t, xs', res' in xs == x :: xs' & res == (x, t) :: res' & make_subst xs' res'
@@ -748,6 +800,67 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
     f 0 xs
 
+(* assumes that t is not Mu *)
+let match_t_ast t ps c =
+    let some = Option.some in
+    let o = Nat.o in
+    let s = Nat.s in
+
+    let rec eqs_hlp eqs = ocanren
+        { eqs == []
+        | fresh t, t', eqs' in eqs == (t, t') :: eqs' & t =~= t' & eqs_hlp eqs'
+        }
+    in
+
+    let rec match_hlp ps num tps = ocanren
+        { ps == [] & num == o & tps == []
+        | fresh p, ps', res in ps == p :: ps' & match_t t p res &
+            { res == None & match_hlp ps' num tps
+            | fresh tps', tps'', num', eqs in res == some (tps', eqs)
+                & num == s num' & eqs_hlp eqs & List.appendo tps' tps'' tps
+                & match_hlp ps' num' tps''
+            }
+        }
+    in
+
+    let rec match_c_hlp tps c = ocanren
+        { tps == [] & c == CTop
+        | fresh t, ps, tps', c2 in tps == (t, ps) :: tps' & c == CAnd (CMatch (t, ps), c2)
+            & match_c_hlp tps' c2
+        }
+    in
+
+    (*
+    debug_var c (Fun.flip reify_lama_c) (fun cs ->
+        debug_var t (Fun.flip reify_lama_t) (fun ts ->
+            debug_var ps (Fun.flip (List.reify reify_lama_p)) (fun pss ->
+                Printf.printf "%s |- matchT*(%s, %s)"
+                    (GT.show GT.list (GT.show logic_lama_c) cs)
+                    (GT.show GT.list (GT.show logic_lama_t) ts)
+                    (GT.show GT.list (GT.show List.logic (GT.show logic_lama_p)) pss)
+                    ;
+                print_newline () ;
+                success))) &&&
+    *)
+
+    ocanren { fresh num, tps, tps' in num =/= o & match_hlp ps num tps
+        & group_by_fst tps tps' & match_c_hlp tps' c } (* MT-Ast *)
+
+let match_sexp_hlp ps =
+    let max_length = !sexp_max_length in
+
+    let check_n n = if n > max_length then failure else success in
+
+    let rec hlp n xs c = let n' = n + 1 in ocanren { check_n n &
+        { xs == [] & c == CTop
+        | fresh xts, xs', c1, c2 in xs == xts :: xs' & c == CAnd (c1, c2)
+            & match_t_ast (TSexp [xts]) ps c1
+            & hlp n' xs' c2
+        }
+    } in
+
+    hlp 0
+
 let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
     (* We want here to require that xs contains label x with types ts and all other labels
      * is NOT label x
@@ -804,9 +917,8 @@ let unmu t t' =
 
 let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
     { c' == CTop
-    | c' =/= CAnd (_, _) & ent_one c c' CTop
-    | fresh c1, c2 in c' == CAnd (c1, c2) & ent_one c c1 c2
-    } (* TODO scheduler *)
+    | fresh c'', rest in schedule c' c'' rest & ent_one c c'' rest
+    }
 
 and ent_one c c' rest : goal =
     let rec hlp c = ocanren
@@ -863,67 +975,6 @@ and ent_one c c' rest : goal =
     | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs)
         & sexp_x_hlp x xs ts & c //- rest } (* C-Sexp *)
     }
-
-and match_sexp_hlp ps =
-    let max_length = !sexp_max_length in
-
-    let check_n n = if n > max_length then failure else success in
-
-    let rec hlp n xs c = let n' = n + 1 in ocanren { check_n n &
-        { xs == [] & c == CTop
-        | fresh xts, xs', c1, c2 in xs == xts :: xs' & c == CAnd (c1, c2)
-            & match_t_ast (TSexp [xts]) ps c1
-            & hlp n' xs' c2
-        }
-    } in
-
-    hlp 0
-
-(* assumes that t is not Mu *)
-and match_t_ast t ps c =
-    let some = Option.some in
-    let o = Nat.o in
-    let s = Nat.s in
-
-    let rec eqs_hlp eqs = ocanren
-        { eqs == []
-        | fresh t, t', eqs' in eqs == (t, t') :: eqs' & t =~= t' & eqs_hlp eqs'
-        }
-    in
-
-    let rec match_hlp ps num tps = ocanren
-        { ps == [] & num == o & tps == []
-        | fresh p, ps', res in ps == p :: ps' & match_t t p res &
-            { res == None & match_hlp ps' num tps
-            | fresh tps', tps'', num', eqs in res == some (tps', eqs)
-                & num == s num' & eqs_hlp eqs & List.appendo tps' tps'' tps
-                & match_hlp ps' num' tps''
-            }
-        }
-    in
-
-    let rec match_c_hlp tps c = ocanren
-        { tps == [] & c == CTop
-        | fresh t, ps, tps', c2 in tps == (t, ps) :: tps' & c == CAnd (CMatch (t, ps), c2)
-            & match_c_hlp tps' c2
-        }
-    in
-
-    (*
-    debug_var c (Fun.flip reify_lama_c) (fun cs ->
-        debug_var t (Fun.flip reify_lama_t) (fun ts ->
-            debug_var ps (Fun.flip (List.reify reify_lama_p)) (fun pss ->
-                Printf.printf "%s |- matchT*(%s, %s)"
-                    (GT.show GT.list (GT.show logic_lama_c) cs)
-                    (GT.show GT.list (GT.show logic_lama_t) ts)
-                    (GT.show GT.list (GT.show List.logic (GT.show logic_lama_p)) pss)
-                    ;
-                print_newline () ;
-                success))) &&&
-    *)
-
-    ocanren { fresh num, tps, tps' in num =/= o & match_hlp ps num tps
-        & group_by_fst tps tps' & match_c_hlp tps' c } (* MT-Ast *)
 
 
 (* Continuation-passing style monad *)
