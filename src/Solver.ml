@@ -802,57 +802,85 @@ let unmu t t' =
         }
     }
 
-let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal =
+let rec ( //- ) (c : injected_lama_c) (c' : injected_lama_c) : goal = ocanren
+    { c' == CTop
+    | c' =/= CAnd (_, _) & ent_one c c' CTop
+    | fresh c1, c2 in c' == CAnd (c1, c2) & ent_one c c1 c2
+    } (* TODO scheduler *)
+
+and ent_one c c' rest : goal =
+    let rec hlp c = ocanren
+        { c =/= CTop & c =/= CAnd (_, _) & c == c' (* C-Refl *)
+        | { fresh c1 in c == CAnd (c1, _) & hlp c1 } (* C-AndL *)
+        | { fresh c2 in c == CAnd (_, c2) & hlp c2 } (* C-AndR *)
+        }
+    in
+
     (*
-    debug_var c' (Fun.flip reify_lama_c) (fun c's ->
-        Printf.printf "||- %s" (GT.show GT.list (GT.show logic_lama_c) c's) ;
-        print_newline () ;
-        success) &&&
+    debug_var c (Fun.flip reify_lama_c) (fun c ->
+        debug_var c' (Fun.flip reify_lama_c) (fun c' ->
+            debug_var rest (Fun.flip reify_lama_c) (fun rest ->
+                Printf.printf "%s ||- %s ; %s"
+                    (GT.show GT.list (GT.show logic_lama_c) c)
+                    (GT.show GT.list (GT.show logic_lama_c) c')
+                    (GT.show GT.list (GT.show logic_lama_c) rest) ;
+                print_newline () ;
+                success))) &&&
     *)
-    ocanren
-    { c == c' (* C-Refl *)
-    (* | c' == CTop (* C-Top *) always in c *)
-    | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c1 & c //- c2 } (* C-And *)
-    (* | { fresh c1, c2 in c' == CAnd (c1, c2) & c //- c2 & c //- c1 } (* C-And *) *)
-    | { fresh c1, c2 in c == CAnd (c1, c2) & c1 //- c' } (* C-AndL *)
-    | { fresh c1, c2 in c == CAnd (c1, c2) & c2 //- c' } (* C-AndR *)
-    (* | { fresh t, t' in c' == CEq (t, t') & t =~= t' } *)
-    | c' == CInd (TString, TInt) (* C-IndString *)
-    | { fresh t1, t1', t2 in c' == CInd (t1, t2) & unmu t1 (TArray t1') & t1' =~= t2 } (* C-IndArray *)
-    | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs) & ind_sexp_hlp xs t2 } (* C-IndSexp *)
-    | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t) & unmu f (TArrow (fxs, fc, fts, ft))
-        & { is_var fxs & fxs == [] | is_not_var fxs } & { is_var fc & fc == CTop | is_not_var fc }
-        & make_subst fxs s & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
-        & c //- fc' } (* C-Call *)
-    | { fresh ps in c' == CMatch (TInt, ps) & match_t_ast c TInt ps } (* C-MatchInt *)
-    | { fresh ps in c' == CMatch (TString, ps) & match_t_ast c TString ps } (* C-MatchString *)
-    | { fresh t, t', ps in c' == CMatch (t, ps) & unmu t (TArray t') & match_t_ast c (TArray t') ps } (* C-MatchArray *)
-    | { fresh t, xs, ps in c' == CMatch (t, ps) & unmu t (TSexp xs) & match_sexp_hlp c ps xs } (* C-MatchSexp *)
-    | { fresh f, fxs, fc, fts, ft, ps in c' == CMatch (f, ps) & unmu f (TArrow (fxs, fc, fts, ft))
-        & match_t_ast c (TArrow (fxs, fc, fts, ft)) ps } (* C-MatchFun *)
-    (* | { fresh x, ps in c' == CMatch (TName x, ps) & is_not_var x & match_t_ast c (TName x) ps } (* hack for Mu *) *)
-    | { fresh x, t, ps in c' == CMatch (TMu (x, t), ps) & is_not_var x
-        & match_t_ast c (TMu (x, t)) ps } (* hack for Mu *)
-    | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs) & sexp_x_hlp x xs ts } (* C-Sexp *)
+
+    delay @@ fun () -> ocanren
+    { hlp c & c //- rest (* inferring from context by C-Refl, C-AndL and C-AndR *)
+    | c' == CTop & c //- rest (* C-Top *)
+    | { fresh c1, c2 in c' == CAnd (c1, c2) & ent_one c c1 (CAnd (c2, rest)) } (* C-And *)
+    | { fresh t, t' in c' == CEq (t, t') & t =~= t' & c //- rest }
+    | { fresh t1, t2 in c' == CInd (t1, t2) & unmu t1 TString & unmu t2 TInt
+        & c //- rest } (* C-IndString *)
+    | { fresh t1, t1', t2 in c' == CInd (t1, t2) & unmu t1 (TArray t1')
+        & t1' =~= t2 & c //- rest } (* C-IndArray *)
+    | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs)
+        & ind_sexp_hlp xs t2 & c //- rest } (* C-IndSexp *)
+    | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t)
+        & unmu f (TArrow (fxs, fc, fts, ft))
+        & { is_var fxs & fxs == [] | is_not_var fxs }
+        & { is_var fc & fc == CTop | is_not_var fc }
+        & make_subst fxs s
+        & subst_t s ft t & subst_c s fc fc' & List.mapo (subst_t s) fts ts
+        & c //- CAnd (fc', rest) } (* C-Call *)
+    | { fresh t, ps, c'' in c' == CMatch (t, ps) & unmu t TInt
+        & match_t_ast TInt ps c'' & c //- CAnd (c'', rest) } (* C-MatchInt *)
+    | { fresh t, ps, c'' in c' == CMatch (t, ps) & unmu t TString
+        & match_t_ast TString ps c'' & c //- CAnd (c'', rest) } (* C-MatchString *)
+    | { fresh t, t', ps, c'' in c' == CMatch (t, ps) & unmu t (TArray t')
+        & match_t_ast (TArray t') ps c'' & c //- CAnd (c'', rest) } (* C-MatchArray *)
+    | { fresh t, xs, ps, c'' in c' == CMatch (t, ps) & unmu t (TSexp xs)
+        & match_sexp_hlp ps xs c'' & c //- CAnd (c'', rest) } (* C-MatchSexp *)
+    | { fresh f, fxs, fc, fts, ft, ps, c'' in c' == CMatch (f, ps)
+        & unmu f (TArrow (fxs, fc, fts, ft))
+        & match_t_ast (TArrow (fxs, fc, fts, ft)) ps c''
+        & c //- CAnd (c'', rest) } (* C-MatchFun *)
+    | { fresh x, t, ps, c'' in c' == CMatch (TMu (x, t), ps) & is_not_var x
+        & match_t_ast (TMu (x, t)) ps c'' & c //- CAnd (c'', rest) } (* hack for Mu *)
+    | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs)
+        & sexp_x_hlp x xs ts & c //- rest } (* C-Sexp *)
     }
 
-and match_sexp_hlp c ps =
+and match_sexp_hlp ps =
     let max_length = !sexp_max_length in
 
     let check_n n = if n > max_length then failure else success in
 
-    let rec hlp n xs = let n' = n + 1 in ocanren { check_n n &
-        { xs == []
-        | fresh xts, xs' in xs == xts :: xs'
-            & match_t_ast c (TSexp [xts]) ps
-            & hlp n' xs'
+    let rec hlp n xs c = let n' = n + 1 in ocanren { check_n n &
+        { xs == [] & c == CTop
+        | fresh xts, xs', c1, c2 in xs == xts :: xs' & c == CAnd (c1, c2)
+            & match_t_ast (TSexp [xts]) ps c1
+            & hlp n' xs' c2
         }
     } in
 
     hlp 0
 
 (* assumes that t is not Mu *)
-and match_t_ast c t ps =
+and match_t_ast t ps c =
     let some = Option.some in
     let o = Nat.o in
     let s = Nat.s in
@@ -874,9 +902,10 @@ and match_t_ast c t ps =
         }
     in
 
-    let rec match_c_hlp tps = ocanren
-        { tps == []
-        | fresh t, ps, tps' in tps == (t, ps) :: tps' & c //- CMatch (t, ps) & match_c_hlp tps'
+    let rec match_c_hlp tps c = ocanren
+        { tps == [] & c == CTop
+        | fresh t, ps, tps', c2 in tps == (t, ps) :: tps' & c == CAnd (CMatch (t, ps), c2)
+            & match_c_hlp tps' c2
         }
     in
 
@@ -894,7 +923,7 @@ and match_t_ast c t ps =
     *)
 
     ocanren { fresh num, tps, tps' in num =/= o & match_hlp ps num tps
-        & group_by_fst tps tps' & match_c_hlp tps' } (* MT-Ast *)
+        & group_by_fst tps tps' & match_c_hlp tps' c } (* MT-Ast *)
 
 
 (* Continuation-passing style monad *)
