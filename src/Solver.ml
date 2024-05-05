@@ -989,6 +989,16 @@ module Monad = struct
 
         let ( let* ) m k = m >>= k
     end
+
+    let rec traverse (f : 'a -> 'b t) = function
+    | [] -> return []
+    | x :: xs ->
+        let open Syntax in
+
+        let* x = f x in
+        let* xs = traverse f xs in
+        return @@ x :: xs
+
 end
 
 module T = Typing
@@ -1024,20 +1034,20 @@ and project_p get_sexp : ground_lama_p -> TT.p = function
 | PSexpTag -> `SexpTag
 | PFunTag -> `FunTag
 
-and project_c get_sexp : ground_lama_c -> TT.c = function
-| CTop -> `Top
-| CAnd (l, r) -> `And (project_c get_sexp l, project_c get_sexp r)
-| CEq (l, r) -> `Eq (project_t get_sexp l, project_t get_sexp r)
-| CInd (l, r) -> `Ind (project_t get_sexp l, project_t get_sexp r)
-| CCall (t, ss, s) -> `Call ( project_t get_sexp t
-                            , OrigList.map (project_t get_sexp) ss, project_t get_sexp s
-                            )
+and project_c get_sexp : ground_lama_c -> TT.c list = function
+| CTop -> []
+| CAnd (l, r) -> project_c get_sexp l @ project_c get_sexp r
+| CEq (l, r) -> [`Eq (project_t get_sexp l, project_t get_sexp r)]
+| CInd (l, r) -> [`Ind (project_t get_sexp l, project_t get_sexp r)]
+| CCall (t, ss, s) -> [`Call ( project_t get_sexp t
+                             , OrigList.map (project_t get_sexp) ss, project_t get_sexp s
+                             )]
 
-| CMatch (t, ps) -> `Match (project_t get_sexp t, OrigList.map (project_p get_sexp) ps)
-| CSexp (x, t, ts) -> `Sexp ( get_sexp x
-                            , project_t get_sexp t
-                            , OrigList.map (project_t get_sexp) ts
-                            )
+| CMatch (t, ps) -> [`Match (project_t get_sexp t, OrigList.map (project_p get_sexp) ps)]
+| CSexp (x, t, ts) -> [`Sexp ( get_sexp x
+                             , project_t get_sexp t
+                             , OrigList.map (project_t get_sexp) ts
+                             )]
 
 module SM = Map.Make(String)
 
@@ -1091,7 +1101,7 @@ let make_inject () =
         let xs = GT.foldr GT.list (Fun.flip List.cons) (List.nil ())
             @@ OrigList.map (!!) @@ TT.IS.elements xs in
 
-        let* c = inject_c bvs c in
+        let* c = inject_c' bvs c in
         let* ts = inject_list (inject_t bvs) ts in
         let* t = inject_t bvs t in
 
@@ -1133,12 +1143,6 @@ let make_inject () =
     | `FunTag -> M.return @@ pFunTag ()
 
     and inject_c (bvs : TT.IS.t) : TT.c -> injected_lama_c M.t = function
-    | `Top -> M.return @@ cTop ()
-    | `And (l, r) ->
-        let* l = inject_c bvs l in
-        let* r = inject_c bvs r in
-        M.return @@ cAnd l r
-
     | `Eq (l, r) ->
         let* l = inject_t bvs l in
         let* r = inject_t bvs r in
@@ -1167,6 +1171,10 @@ let make_inject () =
         let* ts = inject_list (inject_t bvs) ts in
 
         M.return @@ cSexp !!x t ts
+
+    and inject_c' bvs c =
+        let* c = M.traverse (inject_c bvs) c in
+        M.return @@ OrigList.fold_left cAnd (cTop ()) c
     in
 
     object
@@ -1178,9 +1186,10 @@ let make_inject () =
         method list = inject_list
         method t = inject_t
         method c = inject_c
+        method c' = inject_c'
     end
 
-let solve (c : TT.c) : TT.t Subst.t =
+let solve (c : TT.c list) : TT.t Subst.t =
     let inject = make_inject () in
 
     (*
@@ -1200,7 +1209,7 @@ let solve (c : TT.c) : TT.t Subst.t =
     Stream.iter (fun res -> print_endline @@ GT.show logic_lama_c res) res ;
     *)
 
-    let make_goal (ans : injected_lama_t List.injected) : goal = inject#c TT.IS.empty c (fun c ->
+    let make_goal (ans : injected_lama_t List.injected) : goal = inject#c' TT.IS.empty c (fun c ->
         let free_vars = Subst.to_seq inject#free_vars in
 
         print_string "Free variables: " ;

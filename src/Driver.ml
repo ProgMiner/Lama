@@ -208,23 +208,23 @@ let[@ocaml.warning "-32"] main =
             print_endline @@ T.Expr.show_t prog' ;
 
             let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
-                [ "read", `Arrow (T.Type.IS.empty, `Top, [], `Int)
-                ; "write", `Arrow (T.Type.IS.empty, `Top, [`Int], `Int)
+                [ "read", `Arrow (T.Type.IS.empty, [], [], `Int)
+                ; "write", `Arrow (T.Type.IS.empty, [], [`Int], `Int)
                 ; "length", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1]
-                    , `Match (`Name 1, [`Boxed])
+                    , [`Match (`Name 1, [`Boxed])]
                     , [`Name 1]
                     , `Int
                     )
                 ; "string", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1]
-                    , `Top
+                    , []
                     , [`Name 1]
                     , `String
                     )
                 ; "fix", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1; 2]
-                    , `Call (`Name 1, [`Name 2], `Name 2)
+                    , [`Call (`Name 1, [`Name 2], `Name 2)]
                     , [`Name 1]
                     , `Name 2
                     )
@@ -233,14 +233,14 @@ let[@ocaml.warning "-32"] main =
             let infer = T.Type.make_infer () in
             let c, t = infer#term ctx prog' in
 
-            print_endline @@ T.Type.show_c c ;
+            print_endline @@ GT.show GT.list T.Type.show_c c ;
             print_endline @@ T.Type.show_t t ;
 
             let c, s = infer#simplify T.Type.IS.empty c in
             let t = T.Type.subst_t (T.Type.subst_map_to_fun s) T.Type.IS.empty t in
 
             print_endline "After simplify:" ;
-            print_endline @@ T.Type.show_c c ;
+            print_endline @@ GT.show GT.list T.Type.show_c c ;
             print_endline @@ T.Type.show_t t ;
 
             let subst = S.solve c in
@@ -257,11 +257,11 @@ let[@ocaml.warning "-32"] main =
             | Some t -> t
             in
 
-            let c = T.Type.subst_c subst T.Type.IS.empty c in
+            let c = List.map (T.Type.subst_c subst T.Type.IS.empty) c in
             let t = T.Type.subst_t subst T.Type.IS.empty t in
 
             print_endline "Result:" ;
-            print_endline @@ T.Type.show_c c ;
+            print_endline @@ GT.show GT.list T.Type.show_c c ;
             print_endline @@ T.Type.show_t t
         | _ ->
             let rec read acc =

@@ -81,7 +81,7 @@ module Type = struct
     | `String                       (* string *)
     | `Array    of t                (* array *)
     | `Sexp     of (string * t list) list (* S-expression *)
-    | `Arrow    of IS.t * c * t list * t (* arrow *)
+    | `Arrow    of IS.t * c list * t list * t (* arrow *)
     | `Mu       of int * t          (* mu-type *)
     ]
 
@@ -99,8 +99,6 @@ module Type = struct
     ]
 
     and c = [
-    | `Top                          (* always true *)
-    | `And      of c * c            (* logical AND *)
     | `Eq       of t * t            (* syntax equality *)
     | `Ind      of t * t            (* indexable *)
     | `Call     of t * t list * t   (* callable with args and result types *)
@@ -121,7 +119,7 @@ module Type = struct
         ^ GT.show list (fun (x, ts) -> Printf.sprintf "%s (%s)" x @@ GT.show list show_t ts) vs
 
     | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall (%s). (%s) => (%s) -> %s"
-        (show_is xs) (show_c c) (GT.show list show_t ts) (show_t t)
+        (show_is xs) (GT.show list show_c c) (GT.show list show_t ts) (show_t t)
 
     | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
@@ -138,8 +136,6 @@ module Type = struct
     | `FunTag -> "#fun"
 
     and show_c : c -> _ = function
-    | `Top -> "T"
-    | `And (l, r) -> Printf.sprintf "%s && %s" (show_c l) (show_c r)
     | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
@@ -157,7 +153,7 @@ module Type = struct
     | `Arrow (xs, c, ts, t) ->
         let fvs' = List.fold_left ftv IS.empty ts in
         let fvs' = ftv fvs' t in
-        let fvs' = ftv_c fvs' c in
+        let fvs' = List.fold_left ftv_c fvs' c in
         IS.union fvs @@ IS.diff fvs' xs
 
     | `Mu (x, t) ->
@@ -177,8 +173,6 @@ module Type = struct
     | `FunTag -> fvs
 
     and ftv_c fvs : c -> _ = function
-    | `Top -> fvs
-    | `And (l, r) -> ftv_c (ftv_c fvs l) r
     | `Eq (l, r) -> ftv (ftv fvs l) r
     | `Ind (l, r) -> ftv (ftv fvs l) r
     | `Call (t, ts, s) -> ftv (List.fold_left ftv (ftv fvs t) ts) s
@@ -198,7 +192,7 @@ module Type = struct
     | `Sexp xs -> `Sexp (List.map (fun (x, ts) -> x, List.map (subst_t f bvs) ts) xs)
     | `Arrow (xs, c, ts, t) ->
         let bvs = IS.union bvs xs in
-        `Arrow (xs, subst_c f bvs c, List.map (subst_t f bvs) ts, subst_t f bvs t)
+        `Arrow (xs, List.map (subst_c f bvs) c, List.map (subst_t f bvs) ts, subst_t f bvs t)
 
     | `Mu (x, t) ->
         let bvs = IS.add x bvs in
@@ -217,8 +211,6 @@ module Type = struct
     | `FunTag -> `FunTag
 
     and subst_c f bvs : c -> c = function
-    | `Top -> `Top
-    | `And (l, r) -> `And (subst_c f bvs l, subst_c f bvs r)
     | `Eq (l, r) -> `Eq (subst_t f bvs l, subst_t f bvs r)
     | `Ind (l, r) -> `Ind (subst_t f bvs l, subst_t f bvs r)
     | `Call (t, ss, s) -> `Call (subst_t f bvs t, List.map (subst_t f bvs) ss, subst_t f bvs s)
@@ -241,24 +233,6 @@ module Type = struct
     let unfold_mu = function
     | `Mu (x, t) as t' -> subst_t (subst_map_to_fun @@ Subst.singleton x t') IS.empty t
     | t -> t
-
-    (* list of constraints without And and Top *)
-
-    let list_c =
-        let rec list_c acc = function
-        | `Top -> acc
-        | `And (l, r) -> list_c (list_c acc r) l
-        | c -> c :: acc
-        in list_c []
-
-    (* constraint built from list *)
-
-    let c_list = function
-    | [] -> `Top
-    (* NB: rope-like structure with "lightweight" left branch, important for solver *)
-    | c :: cs -> List.fold_left (fun acc c -> `And (c, acc)) c cs
-
-    let c_list cs = c_list @@ List.rev cs
 
     (* unification of types, returns triangular substitution *)
 
@@ -286,8 +260,6 @@ module Type = struct
 
     let unify_c =
         let f (s, res) = function
-        | `Top -> failwith "ill-formed constraint list (Top)"
-        | `And _ -> failwith "ill-formed constraint list (And)"
         | `Eq (l, r) ->
             let sf = subst_map_to_fun s in
             let l = subst_t sf IS.empty l in
@@ -315,9 +287,9 @@ module Type = struct
      *              free constraints.
      *)
 
-    let split_c bvs fvs (c : c) =
+    let split_c bvs fvs (c : c list) =
         let bvs = IS.diff bvs fvs in
-        let c = List.map (fun c -> c, IS.diff (ftv_c IS.empty c) fvs) @@ list_c c in
+        let c = List.map (fun c -> c, IS.diff (ftv_c IS.empty c) fvs) c in
 
         Printf.printf "Source free variables: %s\n"
             @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq fvs ;
@@ -363,8 +335,8 @@ module Type = struct
         in
 
         let (bc, fc) = List.partition pred c in
-        let bc = c_list @@ List.map fst bc in
-        let fc = c_list @@ List.map fst fc in
+        let bc = List.map fst bc in
+        let fc = List.map fst fc in
 
         Printf.printf "Result bound variables: %s\n"
             @@ GT.show list (GT.show int) @@ List.of_seq @@ IS.to_seq bvs ;
@@ -394,19 +366,18 @@ module Type = struct
         (* TODO simplify better *)
 
         let simplify =
-            let rec simplify fvs (c : c) : c * t Subst.t =
-                let c = list_c c in
-
+            let rec simplify fvs (c : c list) : c list * t Subst.t =
                 let s, c = unify_c c in
+
                 let s, c = apply_rcf_rce s c in
 
                 (* we mustn't use fvs here because there are may Eq(fv1, fv2) *)
-                let c = list_c @@ subst_c (subst_map_to_fun s) IS.empty @@ c_list c in
+                let c = List.map (subst_c (subst_map_to_fun s) IS.empty) c in
 
                 (* preserve Eq for free variables *)
                 let eqs = Seq.filter (fun (x, _) -> IS.mem x fvs) @@ Subst.to_seq s in
                 let eqs = Seq.map (fun x, t -> `Eq (`Name x, t)) eqs in
-                let c = c_list @@ List.of_seq eqs @ c in
+                let c = List.of_seq eqs @ c in
 
                 c, s
 
@@ -480,7 +451,7 @@ module Type = struct
              * TODO deal with Call(Mu(..., Arrow(...))) in Mu(x, Arrow(...))
              *)
             and flatten_recursive_calls =
-                let rec rcf x has_rc changed : c -> c = function
+                let rec rcf x has_rc changed : c -> c list = function
                 | `Call (`Arrow (xs, c, ts, t), taus, tau) as c' ->
                     if List.length ts <> List.length taus then failwith @@ Printf.sprintf
                         "wrong number of arguments in call (%d expected but %d given)"
@@ -488,7 +459,7 @@ module Type = struct
 
                     let nested_has_rc = Stdlib.ref false in
                     let nested_changed = Stdlib.ref false in
-                    let c = List.map (rcf x nested_has_rc nested_changed) @@ list_c c in
+                    let c = List.concat_map (rcf x nested_has_rc nested_changed) c in
 
                     if !nested_has_rc then
                         let xs = IS.elements xs in
@@ -498,21 +469,20 @@ module Type = struct
                         let s = Subst.of_seq @@ List.to_seq s in
                         let sf = subst_map_to_fun s in
 
-                        let c = subst_c sf IS.empty @@ c_list c in
+                        let c = List.map (subst_c sf IS.empty) c in
                         let ts = List.map (subst_t sf IS.empty) ts in
                         let t = subst_t sf IS.empty t in
 
                         let eqs = List.map2 (fun t tau -> `Eq (t, tau)) (t :: ts) (tau :: taus) in
-                        let eqs = c_list eqs in
 
                         has_rc := true ;
                         changed := true ;
-                        `And (c, eqs)
+                        c @ eqs
 
-                    else c'
+                    else [c']
 
-                | `Call (`Name y, _, _) as c when x = y -> has_rc := true ; c
-                | c -> c
+                | `Call (`Name y, _, _) as c when x = y -> has_rc := true ; [c]
+                | c -> [c]
                 in
 
                 fun new_c : (t -> (t * t Subst.t) option) -> function
@@ -520,13 +490,13 @@ module Type = struct
                     let has_rc = Stdlib.ref false in
                     let changed = Stdlib.ref false in
 
-                    let c = List.map (rcf x has_rc changed) @@ list_c c in
+                    let c = List.concat_map (rcf x has_rc changed) c in
 
                     if !changed then
                         (* essential FVs at the moment when Arrow was introduced *)
                         let fvs = ftv IS.empty t' in
 
-                        let c, s = simplify fvs @@ c_list c in
+                        let c, s = simplify fvs c in
                         if Subst.mem x s then failwith "recursive variable unified" ;
 
                         let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
@@ -536,7 +506,7 @@ module Type = struct
                         let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
                         let bvs, bc, fc = split_c signature_tvs fvs c in
 
-                        new_c := list_c fc @ !new_c ;
+                        new_c := fc @ !new_c ;
 
                         (* we don't eliminate recursion at all so x must present in bc *)
                         Some (`Mu (x, `Arrow (bvs, bc, ts, t)), s)
@@ -561,32 +531,31 @@ module Type = struct
              * recursion is provably undecidable so we don't try to infer it at all
              *)
             and eliminate_recursive_calls =
-                let rce x ts t changed : c -> c = function
+                let rce x ts t changed : c -> c list = function
                 | `Call (`Name y, taus, tau) when x = y ->
                     if List.length ts <> List.length taus then failwith @@ Printf.sprintf
                         "wrong number of arguments in call (%d expected but %d given)"
                         (List.length ts) (List.length taus) ;
 
                     let eqs = List.map2 (fun t tau -> `Eq (t, tau)) (t :: ts) (tau :: taus) in
-                    let eqs = c_list eqs in
 
                     changed := true ;
                     eqs
 
-                | c -> c
+                | c -> [c]
                 in
 
                 fun new_c : (t -> (t * t Subst.t) option) -> function
                 | `Mu (x, (`Arrow (_, c, ts, t) as t')) ->
                     let changed = Stdlib.ref false in
 
-                    let c = List.map (rce x ts t changed) @@ list_c c in
+                    let c = List.concat_map (rce x ts t changed) c in
 
                     if !changed then
                         (* essential FVs at the moment when Arrow was introduced *)
                         let fvs = ftv IS.empty t' in
 
-                        let c, s = simplify fvs @@ c_list c in
+                        let c, s = simplify fvs c in
                         if Subst.mem x s then failwith "recursive variable unified" ;
 
                         let subst_t' = subst_t (subst_map_to_fun s) IS.empty in
@@ -596,10 +565,11 @@ module Type = struct
                         let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
                         let bvs, bc, fc = split_c signature_tvs fvs c in
 
-                        new_c := list_c fc @ !new_c ;
+                        new_c := fc @ !new_c ;
 
                         let t' = `Arrow (bvs, bc, ts, t) in
-                        let t' = if IS.mem x @@ ftv_c IS.empty bc then `Mu (x, t') else t' in
+                        let t' = if IS.mem x @@ List.fold_left ftv_c IS.empty bc
+                            then `Mu (x, t') else t' in
 
                         Some (t', s)
 
@@ -642,44 +612,44 @@ module Type = struct
             List.rev ps, ctx
         in
 
-        let rec infer ctx : E.t -> c * t = function
+        let rec infer ctx : E.t -> c list * t = function
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
             let c2, t = infer ctx e in
-            `And (c1, c2), t
+            c1 @ c2, t
 
         | E.Seq (l, r) ->
             let c1, _ = infer ctx l in
             let c2, t = infer ctx r in
-            `And (c1, c2), t
+            c1 @ c2, t
 
         | E.Assign (l, r) ->
             let c1, t = infer ctx l in
             let c2, t' = infer ctx r in
-            `And (c1, `And (c2, `Eq (t, t'))), t
+            `Eq (t, t') :: c1 @ c2, t
 
         | E.Binop (l, r) ->
             let c1, t1 = infer ctx l in
             let c2, t2 = infer ctx r in
-            `And (c1, `And (c2, `And (`Eq (t1, `Int), `Eq (t2, `Int)))), `Int
+            `Eq (t1, `Int) :: `Eq (t2, `Int) :: c1 @ c2, `Int
 
         | E.Call (f, xs) ->
             let c, t = infer ctx f in
             let cts = List.map (infer ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> `And (c, c')) c cts in
+            let c = List.fold_left (fun c (c', _) -> c @ c') c cts in
             let s = new_tv () in
-            `And (c, `Call (t, List.map snd cts, s)), s
+            `Call (t, List.map snd cts, s) :: c, s
 
         | E.Subscript (x, i) ->
             let c1, t1 = infer ctx x in
             let c2, t2 = infer ctx i in
             let s = new_tv () in
-            `And (c1, `And (c2, `And (`Eq (t2, `Int), `Ind (t1, s)))), s
+            `Eq (t2, `Int) :: `Ind (t1, s) :: c1 @ c2, s
 
-        | E.Name x -> `Top, Context.find x ctx
-        | E.Int 0 -> `Top, new_tv ()
-        | E.Int _ -> `Top, `Int
-        | E.String _ -> `Top, `String
+        | E.Name x -> [], Context.find x ctx
+        | E.Int 0 -> [], new_tv ()
+        | E.Int _ -> [], `Int
+        | E.String _ -> [], `String
         | E.Lambda (xs, b) ->
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
@@ -706,34 +676,34 @@ module Type = struct
             let bvs, bc, fc = split_c signature_tvs fvs c in
             fc, `Arrow (bvs, bc, ts, t)
 
-        | E.Skip -> `Top, new_tv ()
+        | E.Skip -> [], new_tv ()
         | E.Array xs ->
             let css = List.map (infer ctx) xs in
             let t = new_tv () in
-            let c = List.fold_left (fun c (c', s) -> `And (c, `And (`Eq (t, s), c'))) `Top css in
+            let c = List.fold_left (fun c (c', s) -> `Eq (t, s) :: c @ c') [] css in
             c, `Array t
 
         | E.Sexp (x, xs) ->
             let css = List.map (infer ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> `And (c, c')) `Top css in
+            let c = List.fold_left (fun c (c', _) -> c @ c') [] css in
             let t = new_tv () in
-            `And (c, `Sexp (x, t, List.map snd css)), t
+            `Sexp (x, t, List.map snd css) :: c, t
 
         | E.If (c, t, f) ->
             let c1, _ = infer ctx c in
             let c2, t = infer ctx t in
             let c3, t' = infer ctx f in
-            `And (c1, `And (c2, `And (c3, `Eq (t, t')))), t
+            `Eq (t, t') :: c1 @ c2 @ c3, t
 
         | E.While (c, b) ->
             let c1, _ = infer ctx c in
             let c2, _ = infer ctx b in
-            `And (c1, c2), new_tv ()
+            c1 @ c2, new_tv ()
 
         | E.DoWhile (b, c) ->
             let c1, _ = infer ctx b in
             let c2, _ = infer ctx c in
-            `And (c1, c2), new_tv ()
+            c1 @ c2, new_tv ()
 
         | E.Case (x, bs) ->
             let c, t = infer ctx x in
@@ -742,16 +712,16 @@ module Type = struct
             let f (c, ps) (p, b) =
                 let p, ctx = infer_p ctx p in
                 let c', s' = infer ctx b in
-                `And (c, `And (c', `Eq (s, s'))), p::ps
+                `Eq (s, s') :: c @ c', p::ps
             in
 
             let c, ps = List.fold_left f (c, []) bs in
-            `And (`Match (t, List.rev ps), c), s
+            `Match (t, List.rev ps) :: c, s
 
         and infer_decl ctx = function
         | E.Var (x, v) ->
             let c, t = infer ctx v in
-            `And (c, `Eq (Context.find x ctx, t))
+            `Eq (Context.find x ctx, t) :: c
 
         | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
 
@@ -759,7 +729,7 @@ module Type = struct
             let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
             let ctx = List.fold_left f ctx ds in
 
-            List.fold_left (fun c d -> `And (infer_decl ctx d, c)) `Top ds, ctx
+            List.fold_left (fun c d -> infer_decl ctx d @ c) [] ds, ctx
         in
 
         object
