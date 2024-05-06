@@ -37,7 +37,23 @@ let make_goal t = ocanren {
 }
 *)
 
-let make_goal t = ocanren { set_occurs_hook_lama_t t & t == TArray t }
+(* Call(forall ({}). ([]) => ([Int]) -> Int, [Int], tv_17) *)
+let make_goal c ts = ocanren {
+    fresh t1 in ts == [t1] & c //- [CCall (TArrow ([], [], [TInt], TInt), [TInt], t1)]
+}
 
-let res () = Stream.take ~n:1 @@
-    run q make_goal (fun x -> x#reify reify_lama_t)
+let print_res (c, ts) =
+    print_endline @@ "c  = " ^ GT.show GT.list Typing.Type.show_c c ;
+    print_endline @@ "ts = " ^ GT.show GT.list Typing.Type.show_t ts
+
+let project_res (c, ts) =
+    try
+        let get_sexp = string_of_int in
+        let c = List.map (project_c get_sexp) @@ logic_list_to_ground logic_lama_c_to_ground c in
+        let ts = List.map (project_t get_sexp) @@ logic_list_to_ground logic_lama_t_to_ground ts in
+        Some (c, ts)
+    with Failure x -> print_endline @@ "Failure: " ^ x ; None
+
+let res () = Stream.iter print_res @@ Stream.map Option.get @@ Stream.filter Option.is_some
+    @@ Stream.map project_res @@ run qr make_goal (fun c ts ->
+        c#reify @@ Std.List.reify reify_lama_c, ts#reify @@ Std.List.reify reify_lama_t)

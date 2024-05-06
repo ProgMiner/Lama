@@ -989,14 +989,22 @@ let unmu t t' =
         }
     }
 
+let max_constraint_context = Stdlib.ref 0
+
 let rec ( //- ) c c' : goal =
     let ent_one c c' rest : goal =
-        let rec hlp c = ocanren {
-            fresh c1, c2 in c == c1 :: c2 &
-                { c1 == c' (* C-Refl + C-AndL *)
-                | c1 =/= c' & hlp c2 (* C-AndR *)
-                }
-        } in
+        let hlp =
+            let check_n n = if n >= !max_constraint_context then failure else success in
+
+            let rec hlp n c = let n' = n + 1 in ocanren {
+                check_n n & fresh c1, c2 in c == c1 :: c2 &
+                    { c1 == c' (* C-Refl + C-AndL *)
+                    | c1 =/= c' & hlp n' c2 (* C-AndR *)
+                    }
+            } in
+
+            hlp 0
+        in
 
         let now_rest = ocanren { c //- rest } in
         let now_rest_with c' = ocanren { fresh c'' in List.appendo c' rest c'' & c //- c'' } in
@@ -1249,7 +1257,7 @@ let make_inject () =
         method c = inject_c
     end
 
-let solve (c : TT.c list) : TT.t Subst.t =
+let solve bvs c' : TT.c list * TT.t Subst.t =
     let inject = make_inject () in
 
     (*
@@ -1269,8 +1277,7 @@ let solve (c : TT.c list) : TT.t Subst.t =
     Stream.iter (fun res -> print_endline @@ GT.show logic_lama_c res) res ;
     *)
 
-    let inject_c = inject#list @@ inject#c TT.IS.empty in
-    let make_goal (ans : injected_lama_t List.injected) : goal = inject_c c (fun c ->
+    let make_goal c ts : goal = inject#list (inject#c bvs) c' (fun c' ->
         let free_vars = Subst.to_seq inject#free_vars in
 
         print_string "Free variables: " ;
@@ -1289,72 +1296,55 @@ let solve (c : TT.c list) : TT.t Subst.t =
         Printf.printf "Max Sexp labels: %d\n" !sexp_max_length ;
         Printf.printf "Max args of Sexp ctor: %d\n" !sexp_max_args ;
 
-        ocanren { ans == free_vars & [] //- c }
+        ocanren { ts == free_vars & c //- c' }
     ) in
 
-    let res = run q make_goal (fun x -> x#reify @@ List.prj_exn reify_lama_t) in
+    let ans = run qr make_goal (fun c ts ->
+        c#reify @@ List.reify reify_lama_c, ts#reify @@ List.prj_exn reify_lama_t
+    ) in
 
-    (*
-    (* too slow *)
-    (* TODO fix relations and remove set *)
-    let module Ans = struct
+    let ans = Stream.map Stdlib.Option.get @@ Stream.filter Stdlib.Option.is_some
+        @@ Fun.flip Stream.map ans (fun (c, ts) ->
+            try Some ( logic_list_to_ground logic_lama_c_to_ground c
+                     , OrigList.map logic_lama_t_to_ground ts
+                     )
 
-        type t = ground_lama_t list
-
-        let compare = GT.compare GT.list (GT.compare ground_lama_t)
-        let compare l r = GT.cmp_to_int @@ compare l r
-    end in
-
-    let module AS = Set.Make(Ans) in
-
-    (*
-    let ans = Stream.fold (fun ans res ->
-        let ans = AS.add (OrigList.map logic_lama_t_to_ground res) ans in
-
-        if AS.cardinal ans > 1
-        then failwith "more than one solution found"
-        else ans
-    ) AS.empty res in
-    *)
-
-    let ans = Stream.fold (fun ans res ->
-        AS.add (OrigList.map logic_lama_t_to_ground res) ans
-    ) AS.empty res in
-
-    let ans = AS.elements ans in
-
-    (* type system has no most general type so we allow multiple different results *)
-
-    let ans = match ans with
-    | [] -> failwith "no one solution found"
-    | [ans] -> ans
-    | ans :: _ as anss ->
-        Printf.printf "More than one solution found:\n" ;
-        OrigList.iter print_endline
-            @@ OrigList.map (GT.show GT.list (GT.show ground_lama_t)) anss ;
-        ans
-    in
-    *)
-
-    let ans = Stream.take ~n:1 @@ Stream.map Stdlib.Option.get
-        @@ Stream.filter Stdlib.Option.is_some @@ Stream.map (fun ans ->
-            try Some (OrigList.map logic_lama_t_to_ground ans)
             with _ -> None
-        ) res
+        )
     in
 
-    let ans = match ans with
-    | [] -> failwith "no one solution found"
-    | [ans] -> ans
-    | _ -> failwith "not reachable"
+    let ans =
+        let prev_context_length = Stdlib.ref (-1) in
+        let p (c, _) =
+            let n = OrigList.length c in
+
+            if n = !prev_context_length then false else begin
+                prev_context_length := n ;
+                true
+            end
+        in
+
+        Stream.take_while p ans
     in
 
-    print_endline @@ "Answer: " ^ GT.show GT.list (GT.show ground_lama_t) ans ;
+    (* assume that one answer always exists *)
+    let (_, c, ts) = Stream.fold (fun (i, _, _) (c, ts) ->
+        print_endline @@ "Answer #" ^ string_of_int i ^ ":" ;
+        print_endline @@ "  c  = " ^ GT.show GT.list (GT.show ground_lama_c) c ;
+        print_endline @@ "  ts = " ^ GT.show GT.list (GT.show ground_lama_t) ts ;
+
+        (i + 1, c, ts)
+    ) (1, [], []) ans in
+
+    print_endline    "Answer:" ;
+    print_endline @@ "  c  = " ^ GT.show GT.list (GT.show ground_lama_c) c ;
+    print_endline @@ "  ts = " ^ GT.show GT.list (GT.show ground_lama_t) ts ;
 
     let free_vars = Seq.map fst @@ Subst.to_seq inject#free_vars in
-
     let subst = Seq.fold_left (fun subst (v, t) -> Subst.add v t subst) Subst.empty
-        @@ Seq.zip free_vars (OrigList.to_seq ans) in
+        @@ Seq.zip free_vars @@ OrigList.to_seq ts in
+
+    if Subst.cardinal subst <> Seq.length free_vars then failwith "wrong substitution size" ;
 
     let module IM = Map.Make(Int) in
 
@@ -1365,6 +1355,7 @@ let solve (c : TT.c list) : TT.t Subst.t =
 
     let get_sexp x = IM.find x sexp_labels_inv in
 
-    if Subst.cardinal subst <> OrigList.length ans
-    then failwith "wrong substitution size"
-    else Subst.map (project_t get_sexp) subst
+    let c = OrigList.map (project_c get_sexp) c in
+    let subst = Subst.map (project_t get_sexp) subst in
+
+    c, subst

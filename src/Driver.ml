@@ -243,7 +243,12 @@ let[@ocaml.warning "-32"] main =
             print_endline @@ GT.show GT.list T.Type.show_c c ;
             print_endline @@ T.Type.show_t t ;
 
-            let subst = S.solve c in
+            let c', subst = S.solve T.Type.IS.empty c in
+
+            if c' <> [] then begin
+                print_endline "Unable to solve following constraints: " ;
+                List.iter (fun c -> print_endline @@ "  - " ^ T.Type.show_c c) c'
+            end ;
 
             print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
                 let t = T.Type.show_t t in
@@ -262,7 +267,9 @@ let[@ocaml.warning "-32"] main =
 
             print_endline "Result:" ;
             print_endline @@ GT.show GT.list T.Type.show_c c ;
-            print_endline @@ T.Type.show_t t
+            print_endline @@ T.Type.show_t t ;
+
+            if c' <> [] then failwith "Typecheck failed"
         | _ ->
             let rec read acc =
               try
