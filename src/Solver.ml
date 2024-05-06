@@ -354,6 +354,19 @@ let rec group_by_fst kvs res = ocanren
         & group_by_fst kvs'' res'
     }
 
+(* x = min_lt(xs), xs' = xs \ x *)
+let list_minimum lt =
+    let rec hlp xs x xs' = ocanren
+        { xs == [x] & xs' == []
+        | fresh x1, xs1, x1', xs1', res in xs == x1 :: xs1 & hlp xs1 x1' xs1' & lt x1 x1' res &
+            { res == true & x == x1 & xs' == xs1
+            | res == false & x == x1' & xs' == x1 :: xs1'
+            }
+        }
+    in
+
+    hlp
+
 let rec eq_list eq xs xs' = ocanren
     { xs == xs'
     | xs =/= xs' &
@@ -562,10 +575,112 @@ and subst_c s c c' =
         }
     }
 
+(*
 (* primitive solving scheduler *)
 let schedule c c' rest = ocanren { c == c' :: rest }
+*)
 
-(* solving scheduler *)
+(* slow and fair solving scheduler *)
+let schedule =
+    (* Eq < Call(const) < Sexp < Ind(const) < Match(const) < Ind(var) < Match(var) < Call(var) *)
+
+    let eq          c = ocanren {            c == CEq    (   _, _   )                } in
+    let ind_var     c = ocanren { fresh t in c == CInd   (   t, _   ) & is_var     t } in
+    let ind_const   c = ocanren { fresh t in c == CInd   (   t, _   ) & is_not_var t } in
+    let call_var    c = ocanren { fresh t in c == CCall  (   t, _, _) & is_var     t } in
+    let call_const  c = ocanren { fresh t in c == CCall  (   t, _, _) & is_not_var t } in
+    let match_var   c = ocanren { fresh t in c == CMatch (   t, _   ) & is_var     t } in
+    let match_const c = ocanren { fresh t in c == CMatch (   t, _   ) & is_not_var t } in
+    let sexp        c = ocanren {            c == CSexp  (_, _, _   )                } in
+
+    let lt_c c1 c2 res = ocanren
+        { eq c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == true
+            | sexp        c2 & res == true
+            | ind_const   c2 & res == true
+            | match_const c2 & res == true
+            | ind_var     c2 & res == true
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | call_const c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == true
+            | ind_const   c2 & res == true
+            | match_const c2 & res == true
+            | ind_var     c2 & res == true
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | sexp c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == true
+            | match_const c2 & res == true
+            | ind_var     c2 & res == true
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | ind_const c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == false
+            | match_const c2 & res == true
+            | ind_var     c2 & res == true
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | match_const c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == false
+            | match_const c2 & res == false
+            | ind_var     c2 & res == true
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | ind_var c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == false
+            | match_const c2 & res == false
+            | ind_var     c2 & res == false
+            | match_var   c2 & res == true
+            | call_var    c2 & res == true
+            }
+        | match_var c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == false
+            | match_const c2 & res == false
+            | ind_var     c2 & res == false
+            | match_var   c2 & res == false
+            | call_var    c2 & res == true
+            }
+        | call_var c1 &
+            { eq          c2 & res == false
+            | call_const  c2 & res == false
+            | sexp        c2 & res == false
+            | ind_const   c2 & res == false
+            | match_const c2 & res == false
+            | ind_var     c2 & res == false
+            | match_var   c2 & res == false
+            | call_var    c2 & res == false
+            }
+        }
+    in
+
+    list_minimum lt_c
+
+(*
+(* fast and greedy solving scheduler *)
 let schedule orig_c c' orig_rest = call_fresh @@ fun tmp_rest ->
     let rec hlp c rest =
         let return = ocanren { orig_rest == tmp_rest & c == c' :: rest } in
@@ -594,6 +709,7 @@ let schedule orig_c c' orig_rest = call_fresh @@ fun tmp_rest ->
     in
 
     hlp orig_c tmp_rest
+*)
 
 let rec make_subst xs res = ocanren
     { xs == [] & res == []
