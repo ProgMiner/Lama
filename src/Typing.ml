@@ -343,6 +343,9 @@ module Type = struct
 
         bvs, bc, fc
 
+    (* forward reference to relational solver function *)
+    let relational_solver : (IS.t -> c list -> c list * t Subst.t) ref = Stdlib.ref @@ Obj.magic 0
+
     (* make inferrer *)
 
     let make_infer () =
@@ -504,6 +507,8 @@ module Type = struct
                         let t = subst_t' t in
 
                         let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+                        let c, _ = !relational_solver (IS.union fvs signature_tvs) c in
+
                         let bvs, bc, fc = split_c signature_tvs fvs c in
 
                         new_c := fc @ !new_c ;
@@ -563,6 +568,8 @@ module Type = struct
                         let t = subst_t' t in
 
                         let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+                        let c, _ = !relational_solver (IS.union fvs signature_tvs) c in
+
                         let bvs, bc, fc = split_c signature_tvs fvs c in
 
                         new_c := fc @ !new_c ;
@@ -664,15 +671,9 @@ module Type = struct
 
             (* TODO maybe convert to de Brujne notation to simplify alpha-equality check? *)
 
-            (*
-            (* naïve approach *)
-            let all_tvs = ftv IS.empty t in
-            let all_tvs = ftv_c all_tvs c in
-            let all_tvs = List.fold_left ftv all_tvs ts in
-            Top, Arrow (IS.diff all_tvs fvs, c, ts, t)
-            *)
-
             let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
+            let c, _ = !relational_solver (IS.union fvs signature_tvs) c in
+
             let bvs, bc, fc = split_c signature_tvs fvs c in
             fc, `Arrow (bvs, bc, ts, t)
 

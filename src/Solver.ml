@@ -991,19 +991,26 @@ let unmu t t' =
 
 let max_constraint_context = Stdlib.ref 0
 
+let check_context_length c =
+    let r e c = logic_list_to_ground (fun () -> ()) @@ List.reify (fun _ _ -> ()) c e in
+
+    debug_var c r (fun (c::_) ->
+        if OrigList.length c > !max_constraint_context then failure else success)
+
 let rec ( //- ) c c' : goal =
     let ent_one c c' rest : goal =
         let hlp =
-            let check_n n = if n >= !max_constraint_context then failure else success in
+            let max_constraint_context = !max_constraint_context in
+            let check_n n = if n > max_constraint_context then failure else success in
 
             let rec hlp n c = let n' = n + 1 in ocanren {
                 check_n n & fresh c1, c2 in c == c1 :: c2 &
                     { c1 == c' (* C-Refl + C-AndL *)
-                    | c1 =/= c' & hlp n' c2 (* C-AndR *)
+                    | is_not_var c1 & c1 =/= c' & hlp n' c2 (* C-AndR *)
                     }
             } in
 
-            hlp 0
+            hlp 1
         in
 
         let now_rest = ocanren { c //- rest } in
@@ -1056,9 +1063,10 @@ let rec ( //- ) c c' : goal =
         }
     in
 
-    ocanren
-    { c' == [] (* C-Top *)
-    | fresh c'', rest in schedule c' c'' rest & ent_one c c'' rest
+    ocanren { check_context_length c &
+        { c' == [] (* C-Top *)
+        | fresh c'', rest in schedule c' c'' rest & ent_one c c'' rest
+        }
     }
 
 
@@ -1257,7 +1265,7 @@ let make_inject () =
         method c = inject_c
     end
 
-let solve bvs c' : TT.c list * TT.t Subst.t =
+let solve fvs c' : TT.c list * TT.t Subst.t =
     let inject = make_inject () in
 
     (*
@@ -1277,7 +1285,10 @@ let solve bvs c' : TT.c list * TT.t Subst.t =
     Stream.iter (fun res -> print_endline @@ GT.show logic_lama_c res) res ;
     *)
 
-    let make_goal c ts : goal = inject#list (inject#c bvs) c' (fun c' ->
+    (* set max context size *)
+    max_constraint_context := OrigList.length c' ;
+
+    let make_goal c ts : goal = inject#list (inject#c fvs) c' (fun c' ->
         let free_vars = Subst.to_seq inject#free_vars in
 
         print_string "Free variables: " ;
@@ -1295,6 +1306,7 @@ let solve bvs c' : TT.c list * TT.t Subst.t =
 
         Printf.printf "Max Sexp labels: %d\n" !sexp_max_length ;
         Printf.printf "Max args of Sexp ctor: %d\n" !sexp_max_args ;
+        Printf.printf "Max constraint context size: %d\n" !max_constraint_context ;
 
         ocanren { ts == free_vars & c //- c' }
     ) in
@@ -1314,26 +1326,23 @@ let solve bvs c' : TT.c list * TT.t Subst.t =
     in
 
     let ans =
-        let prev_context_length = Stdlib.ref (-1) in
-        let p (c, _) =
-            let n = OrigList.length c in
-
-            if n = !prev_context_length then false else begin
-                prev_context_length := n ;
-                true
-            end
-        in
+        let got_null = Stdlib.ref false in
+        let p (c, _) = if c <> [] then not !got_null else begin got_null := true ; true end in
 
         Stream.take_while p ans
     in
 
     (* assume that one answer always exists *)
-    let (_, c, ts) = Stream.fold (fun (i, _, _) (c, ts) ->
-        print_endline @@ "Answer #" ^ string_of_int i ^ ":" ;
-        print_endline @@ "  c  = " ^ GT.show GT.list (GT.show ground_lama_c) c ;
-        print_endline @@ "  ts = " ^ GT.show GT.list (GT.show ground_lama_t) ts ;
+    let (_, c, ts) = Stream.fold (fun ((i, _, _) as prev) (c, ts) ->
+        if OrigList.length c > !max_constraint_context then prev else begin
+            max_constraint_context := OrigList.length c - 1 ;
 
-        (i + 1, c, ts)
+            print_endline @@ "Answer #" ^ string_of_int i ^ ":" ;
+            print_endline @@ "  c  = " ^ GT.show GT.list (GT.show ground_lama_c) c ;
+            print_endline @@ "  ts = " ^ GT.show GT.list (GT.show ground_lama_t) ts ;
+
+            (i + 1, c, ts)
+        end
     ) (1, [], []) ans in
 
     print_endline    "Answer:" ;
@@ -1359,3 +1368,5 @@ let solve bvs c' : TT.c list * TT.t Subst.t =
     let subst = Subst.map (project_t get_sexp) subst in
 
     c, subst
+
+let _ = Typing.Type.relational_solver := solve
