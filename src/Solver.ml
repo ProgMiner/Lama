@@ -7,14 +7,14 @@ open OCanren
 open OCanren.Std
 
 
-@type ('var, 'var_list, 'c_list, 't_list, 't, 'sexp) lama_t =
-| TName of 'var
+@type ('nat, 'c_list, 't_list, 't, 'sexp) lama_t =
+| TName of 'nat
 | TInt
 | TString
 | TArray of 't
 | TSexp of 'sexp
-| TArrow of 'var_list * 'c_list * 't_list * 't
-| TMu of 'var * 't
+| TArrow of 'nat * 'c_list * 't_list * 't
+| TMu of 't
 with show, compare, foldl, gmap
 
 @type ('t, 'p, 'p_list, 'i) lama_p =
@@ -39,8 +39,7 @@ with show, compare, foldl, gmap
 with show, compare, foldl, gmap
 
 @type ground_lama_t =
-    ( int
-    , int List.ground
+    ( Nat.ground
     , ground_lama_c List.ground
     , ground_lama_t List.ground
     , ground_lama_t
@@ -61,8 +60,7 @@ and ground_lama_c =
 with show, compare, foldl, gmap
 
 @type logic_lama_t =
-    ( int logic
-    , int logic List.logic
+    ( Nat.logic
     , logic_lama_c List.logic
     , logic_lama_t List.logic
     , logic_lama_t
@@ -83,8 +81,7 @@ and logic_lama_c =
 with show, compare, foldl, gmap
 
 type injected_lama_t =
-    ( int ilogic
-    , int ilogic List.injected
+    ( Nat.injected
     , injected_lama_c List.injected
     , injected_lama_t List.injected
     , injected_lama_t
@@ -109,8 +106,8 @@ let tInt () = inj TInt
 let tString () = inj TString
 let tArray t = inj (TArray t)
 let tSexp xs = inj (TSexp xs)
-let tArrow xs c ts t = inj (TArrow (xs, c, ts, t))
-let tMu x t = inj (TMu (x, t))
+let tArrow n c ts t = inj (TArrow (n, c, ts, t))
+let tMu t = inj (TMu t)
 
 let pWildcard () = inj PWildcard
 let pTyped t p = inj (PTyped (t, p))
@@ -136,12 +133,11 @@ let reify_lama_t
     let open Env.Monad in
     let open Syntax in
 
-    let* reify_list = List.reify Reifier.reify in
     let* reify_string = Reifier.reify in
-    let* reify_int = Reifier.reify in
+    let* reify_nat = Nat.reify in
 
     Reifier.fix (fun self ->
-        let* reify_lama_c_list = List.reify (reify_lama_c self) in
+        let* reify_lama_c_list = List.reify @@ reify_lama_c self in
         let* reify_lama_t_list = List.reify self in
         let* self = self in
 
@@ -160,8 +156,7 @@ let reify_lama_t
             let rec f = function
             | Var (i, xs) -> Var (i, Stdlib.List.map f xs)
             | Value x -> Value (GT.gmap lama_t
-                reify_int
-                reify_list
+                reify_nat
                 reify_lama_c_list
                 reify_lama_t_list
                 self
@@ -230,9 +225,14 @@ let reify_lama_t = reify_lama_t reify_lama_c
 let reify_lama_p = reify_lama_p reify_lama_t
 let reify_lama_c = reify_lama_c reify_lama_t
 
-let reify_subst xs = List.reify (Pair.reify Reifier.reify reify_lama_t) xs
+let reify_subst xs = List.reify (Pair.reify Nat.reify reify_lama_t) xs
 let show_subst = GT.show List.logic @@ GT.show Pair.logic
-    (GT.show logic (GT.show int)) (GT.show logic_lama_t)
+    (GT.show Nat.logic) (GT.show logic_lama_t)
+
+let rec logic_nat_to_ground : Nat.logic -> Nat.ground = function
+| Var _ -> failwith "variable nat"
+| Value Nat.O -> Nat.O
+| Value (Nat.S n) -> Nat.S (logic_nat_to_ground n)
 
 let rec logic_list_to_ground (f : 'a -> 'b) : 'a List.logic -> 'b List.ground = function
 | Var _ -> []
@@ -240,10 +240,9 @@ let rec logic_list_to_ground (f : 'a -> 'b) : 'a List.logic -> 'b List.ground = 
 | Value (List.Cons (x, xs)) -> f x :: logic_list_to_ground f xs
 
 let rec logic_lama_t_to_ground : logic_lama_t -> ground_lama_t = function
-| Var (i, _) -> TName i
+| Var _ -> print_endline "oaoaoa" ; failwith "variable type"
 | Value x -> GT.gmap lama_t
-    from_logic
-    (logic_list_to_ground from_logic)
+    logic_nat_to_ground
     (logic_list_to_ground logic_lama_c_to_ground)
     (logic_list_to_ground logic_lama_t_to_ground)
     logic_lama_t_to_ground
@@ -279,6 +278,10 @@ let logic_to_injected (vars : term_vars) = function
 | Var (v, _) -> vars.get v
 | Value x -> inj x
 
+let rec logic_nat_to_injected (vars : term_vars) = function
+| Var (v, _) -> vars.get v
+| Value x -> inj @@ GT.gmap Nat.t (logic_nat_to_injected vars) x
+
 let rec logic_list_to_injected (vars : term_vars) (f : 'a -> 'b)
     : 'a List.logic -> 'b List.injected = function
 | Var (v, _) -> vars.get v
@@ -287,8 +290,7 @@ let rec logic_list_to_injected (vars : term_vars) (f : 'a -> 'b)
 let rec logic_lama_t_to_injected (vars : term_vars) : logic_lama_t -> injected_lama_t = function
 | Var (v, _) -> vars.get v
 | Value x -> inj @@ GT.gmap lama_t
-    (logic_to_injected vars)
-    (logic_list_to_injected vars @@ logic_to_injected vars)
+    (logic_nat_to_injected vars)
     (logic_list_to_injected vars @@ logic_lama_c_to_injected vars)
     (logic_list_to_injected vars @@ logic_lama_t_to_injected vars)
     (logic_lama_t_to_injected vars)
@@ -322,9 +324,46 @@ and logic_lama_c_to_injected (vars : term_vars) : logic_lama_c -> injected_lama_
     (logic_list_to_injected vars @@ logic_lama_p_to_injected vars)
     x
 
-let occurs_hook_lama_t vars v =
-    let get_var u = if v = u then Obj.magic @@ tName v else vars.get u in
-    fun t -> tMu !!v @@ logic_lama_t_to_injected { get = get_var } t
+let rec lift_var min : int -> Nat.logic -> Nat.logic =
+    if min < 0 then invalid_arg "minimum must not be negative" ;
+
+    let rec incr add x =
+        if add < 0 then invalid_arg "addend must not be negative" ;
+        if add = 0 then x else incr (add - 1) @@ Value (Nat.S x)
+    in
+
+    if min = 0 then incr else fun add -> function
+        | Var _ -> failwith "unable to lift variable natural"
+        | Value Nat.O -> Value Nat.O
+        | Value (Nat.S n) -> lift_var (min - 1) (add + 1) n
+
+let rec lift_vars_t min add : logic_lama_t -> logic_lama_t = GT.gmap logic @@ function
+    | TName n -> TName (lift_var min add n)
+    | TInt -> TInt
+    | TString -> TString
+    | TArray t -> TArray (lift_vars_t min add t)
+    | TSexp xs -> TSexp (GT.gmap List.logic (GT.gmap Pair.logic Fun.id
+        @@ GT.gmap List.logic @@ lift_vars_t min add) xs)
+
+    | TArrow (n, c, ts, t) ->
+        let n' = Nat.to_int @@ logic_nat_to_ground n in
+        let min = min + n' in
+
+        TArrow (n, GT.gmap List.logic (lift_vars_c min add) c,
+            GT.gmap List.logic (lift_vars_t min add) ts, lift_vars_t min add t)
+
+    | TMu t -> TMu (lift_vars_t (min + 1) add t)
+
+and lift_vars_p min add = GT.gmap logic @@ GT.gmap lama_p (lift_vars_t min add)
+    (lift_vars_p min add) (GT.gmap List.logic @@ lift_vars_p min add) Fun.id
+
+and lift_vars_c min add = GT.gmap logic @@ GT.gmap lama_c Fun.id
+    (GT.gmap List.logic @@ lift_vars_t min add) (lift_vars_t min add)
+    (GT.gmap List.logic @@ lift_vars_p min add)
+
+let occurs_hook_lama_t vars v t =
+    let get_var u = if v = u then Obj.magic @@ tName Nat.O else vars.get u in
+    tMu @@ logic_lama_t_to_injected { get = get_var } @@ lift_vars_t 0 1 t
 
 let set_occurs_hook_lama_t t = bind_occurs_hook t reify_lama_t occurs_hook_lama_t
 
@@ -396,10 +435,10 @@ let rec eq_t t t' = ocanren
             | t == TString & t == t'
             | { fresh t1, t1' in t == TArray t1 & t' == TArray t1' & eq_t t1 t1' }
             | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & eq_sexp_hlp xs xs' }
-            | { fresh xs, c, c', ts, ts', t1, t1' in t == TArrow (xs, c, ts, t1)
-                & t' == TArrow (xs, c', ts', t1') & eq_list eq_c c c'
+            | { fresh n, c, c', ts, ts', t1, t1' in t == TArrow (n, c, ts, t1)
+                & t' == TArrow (n, c', ts', t1') & eq_list eq_c c c'
                 & eq_t_list ts ts' & eq_t t1 t' }
-            | { fresh x, t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1') & eq_t t1 t1' }
+            | { fresh t1, t1' in t == TMu t1 & t' == TMu t1' & eq_t t1 t1' }
             }
         }
     }
@@ -480,19 +519,78 @@ and eq_c c c' = ocanren
 let ( =~= ) = eq_t
 let ( =~~= ) = eq_t_list
 
+(* FIXME problem with lifting unification variables... *)
+let rec lift_var_r min add n n' = ocanren
+    { min == 0 & Nat.addo add n n'
+    | fresh min' in min == Nat.s min' &
+        { n == 0 & n' == 0
+        | fresh n1, n1' in n == Nat.s n1 & n' == Nat.s n1' & lift_var_r min' add n1 n1'
+        }
+    }
+
+let rec lift_vars_t_r min add t t' = ocanren
+    { { fresh n, n' in t == TName n & t' == TName n' & lift_var_r min add n n' }
+    | t == TInt & t' == TInt
+    | t == TString & t' == TString
+    | { fresh t1, t1' in t == TArray t & t' == TArray t' & lift_vars_t_r min add t1 t1' }
+    | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs'
+        & List.mapo (lift_vars_sexp_r min add) xs xs' }
+    | { fresh n, min', c, c', ts, ts', t1, t1' in t == TArrow (n, c, ts, t1)
+        & t' == TArrow (n, c', ts', t1') & Nat.addo n min min'
+        & List.mapo (lift_vars_c_r min' add) c c' & List.mapo (lift_vars_t_r min' add) ts ts'
+        & lift_vars_t_r min' add t1 t1' }
+    | { fresh t1, t1' in t == TMu t1 & t' == TMu t1' & lift_vars_t_r (Nat.s min) add t1 t1' }
+    }
+
+and lift_vars_sexp_r min add xts xts' = ocanren {
+    fresh x, ts, ts' in xts == (x, ts) & xts' == (x, ts')
+        & List.mapo (lift_vars_t_r min add) ts ts'
+}
+
+and lift_vars_p_r min add p p' = ocanren
+    { p == PWildcard & p' == PWildcard
+    | { fresh t, t', p1, p1' in p == PTyped (t, p1) & p' == PTyped (t', p1')
+        & lift_vars_t_r min add t t' & lift_vars_p_r min add p1 p1' }
+    | { fresh ps, ps' in p == PArray ps & p' == PArray ps'
+        & List.mapo (lift_vars_p_r min add) ps ps' }
+    | { fresh x, ps, ps' in p == PSexp (x, ps) & p' == PSexp (x, ps')
+        & List.mapo (lift_vars_p_r min add) ps ps' }
+    | p == PBoxed & p' == PBoxed
+    | p == PUnboxed & p' == PUnboxed
+    | p == PStringTag & p' == PStringTag
+    | p == PArrayTag & p' == PArrayTag
+    | p == PSexpTag & p' == PSexpTag
+    | p == PFunTag & p' == PFunTag
+    }
+
+and lift_vars_c_r min add c c' = ocanren
+    { { fresh t1, t1', t2, t2' in c == CEq (t1, t2) & c' == CEq (t1', t2')
+        & lift_vars_t_r min add t1 t1' & lift_vars_t_r min add t2 t2' }
+    | { fresh t1, t1', t2, t2' in c == CInd (t1, t2) & c' == CInd (t1', t2')
+        & lift_vars_t_r min add t1 t1' & lift_vars_t_r min add t2 t2' }
+    | { fresh n, ts, ts', t1, t1' in c == CCall (n, ts, t1) & c' == CCall (n, ts', t1')
+        & List.mapo (lift_vars_t_r min add) ts ts' & lift_vars_t_r min add t1 t1' }
+    | { fresh t1, t1', ps, ps' in c == CMatch (t1, ps) & c' == CMatch (t1', ps')
+        & lift_vars_t_r min add t1 t1' & List.mapo (lift_vars_p_r min add) ps ps' }
+    | { fresh x, t1, t1', ts, ts' in c == CSexp (x, t1, ts) & c' == CSexp (x, t1', ts')
+        & lift_vars_t_r min add t1 t1' & List.mapo (lift_vars_t_r min add) ts ts' }
+    }
+
+let lift_vars_subst min add =
+    let f nt nt' = ocanren {
+        fresh n, n', t, t' in nt == (n, t) & nt' == (n', t')
+            & lift_var_r min add n n' & lift_vars_t_r min add t t'
+    } in
+
+    List.mapo f
+
+let dbg x = debug_var x (fun _ _ -> ()) (fun _ -> print_endline "oaoaoa" ; success)
+
 let rec subst_v x s t = ocanren
     { s == [] & t == TName x
     | fresh x', t', s' in s == (x', t') :: s' &
         { x' == x & t =~= t'
         | x' =/= x & subst_v x s' t
-        }
-    }
-
-let rec filter_subst xs s res = ocanren
-    { s == [] & res == []
-    | fresh x, t, s', has_var in s == (x, t) :: s' & list_member x xs has_var &
-        { has_var == false & { fresh res' in res == (x, t) :: res' & filter_subst xs s' res' }
-        | has_var == true & filter_subst xs s' res
         }
     }
 
@@ -515,12 +613,12 @@ let rec subst_t s t t' =
         | t == TString & t' == TString
         | { fresh at, at' in t == TArray at & t' == TArray at' & subst_t s at at' }
         | { fresh xs, xs' in t == TSexp xs & t' == TSexp xs' & List.mapo (subst_sexp s) xs xs' }
-        | { fresh fxs, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fxs, fc, fts, ft)
-            & t' == TArrow (fxs, fc', fts', ft') & filter_subst fxs s s'
+        | { fresh fn, s', fc, fc', fts, fts', ft, ft' in t == TArrow (fn, fc, fts, ft)
+            & t' == TArrow (fn, fc', fts', ft') & lift_vars_subst 0 fn s s'
             & List.mapo (subst_c s') fc fc' & subst_t s' ft ft'
             & List.mapo (subst_t s') fts fts' }
-        | { fresh x, s', t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1')
-            & is_not_var x & filter_subst [x] s s' & subst_t s' t1 t1' }
+        | { fresh x, s', t1, t1' in t == TMu t1 & t' == TMu t1'
+            & is_not_var x & lift_vars_subst 0 1 s s' & subst_t s' t1 t1' }
         }
     }
 
@@ -561,7 +659,7 @@ and subst_c s c c' =
     *)
     ocanren
     { s == [] & eq_c c c'
-    | s =/= [] &
+    | s =/= [] & dbg () &
         { { fresh t1, t1', t2, t2' in c == CEq (t1, t2) & c' == CEq (t1', t2')
             & subst_t s t1 t1' & subst_t s t2 t2' }
         | { fresh t1, t1', t2, t2' in c == CInd (t1, t2) & c' == CInd (t1', t2')
@@ -711,9 +809,9 @@ let schedule orig_c c' orig_rest = call_fresh @@ fun tmp_rest ->
     hlp orig_c tmp_rest
 *)
 
-let rec make_subst xs res = ocanren
-    { xs == [] & res == []
-    | fresh x, t, xs', res' in xs == x :: xs' & res == (x, t) :: res' & make_subst xs' res'
+let rec make_subst n res = ocanren
+    { n == 0 & res == []
+    | fresh n', t, res' in n == Nat.s n' & res == (n', t) :: res' & make_subst n' res'
     }
 
 let sexp_max_length = Stdlib.ref Int.max_int
@@ -790,8 +888,8 @@ let rec match_t t p (res : match_t_res Option.groundi) =
                         | t =/= TSexp _ &
                             { t == TArrow (_, _, _, _) & res == some ([], []) (* MT-WildcardFun *)
                             | t =/= TArrow (_, _, _, _) &
-                                { t == TMu (_, _) & res == some ([], []) (* hack for Mu *)
-                                | t =/= TMu (_, _) & res == None
+                                { t == TMu _ & res == some ([], []) (* hack for Mu *)
+                                | t =/= TMu _ & res == None
                                 }
                             }
                         }
@@ -984,8 +1082,8 @@ let unmu t t' =
     ocanren
     { is_var t & t == t'
     | is_not_var t &
-        { t =/= TMu (_, _) & t == t'
-        | fresh x, s in t == TMu (x, s) & subst_t [(x, t)] s t'
+        { t =/= TMu _ & t == t'
+        | fresh t1 in t == TMu t1 & subst_t [(0, t)] t1 t'
         }
     }
 
@@ -1022,11 +1120,11 @@ let rec ( //- ) c c' : goal =
             & t1' =~= t2 & now_rest } (* C-IndArray *)
         | { fresh t1, t2, xs in c' == CInd (t1, t2) & unmu t1 (TSexp xs)
             & ind_sexp_hlp xs t2 & now_rest } (* C-IndSexp *)
-        | { fresh f, fxs, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t)
-            & unmu f (TArrow (fxs, fc, fts, ft))
-            & { is_var fxs & fxs == [] | is_not_var fxs }
+        | { fresh f, fn, s, fc, fc', fts, ft, ts, t in c' == CCall (f, ts, t)
+            & unmu f (TArrow (fn, fc, fts, ft))
+            & { is_var fn & fn == 0 | is_not_var fn }
             & { is_var fc & fc == [] | is_not_var fc }
-            & make_subst fxs s
+            & make_subst fn s
             & subst_t s ft t & List.mapo (subst_c s) fc fc' & List.mapo (subst_t s) fts ts
             & now_rest_with fc' } (* C-Call *)
         | { fresh t, ps, c'' in c' == CMatch (t, ps) & unmu t TInt
@@ -1037,12 +1135,12 @@ let rec ( //- ) c c' : goal =
             & match_t_ast (TArray t') ps c'' & now_rest_with c'' } (* C-MatchArray *)
         | { fresh t, xs, ps, c'' in c' == CMatch (t, ps) & unmu t (TSexp xs)
             & match_sexp_hlp ps xs c'' & now_rest_with c'' } (* C-MatchSexp *)
-        | { fresh f, fxs, fc, fts, ft, ps, c'' in c' == CMatch (f, ps)
-            & unmu f (TArrow (fxs, fc, fts, ft))
-            & match_t_ast (TArrow (fxs, fc, fts, ft)) ps c''
+        | { fresh f, fn, fc, fts, ft, ps, c'' in c' == CMatch (f, ps)
+            & unmu f (TArrow (fn, fc, fts, ft))
+            & match_t_ast (TArrow (fn, fc, fts, ft)) ps c''
             & now_rest_with c'' } (* C-MatchFun *)
-        | { fresh x, t, ps, c'' in c' == CMatch (TMu (x, t), ps) & is_not_var x
-            & match_t_ast (TMu (x, t)) ps c'' & now_rest_with c'' } (* hack for Mu *)
+        | { fresh t, ps, c'' in c' == CMatch (TMu t, ps) & is_not_var t
+            & match_t_ast (TMu t) ps c'' & now_rest_with c'' } (* hack for Mu *)
         | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs)
             & sexp_x_hlp x xs ts & now_rest } (* C-Sexp *)
         }
@@ -1070,50 +1168,64 @@ end
 
 module T = Typing
 module TT = T.Type
-module Subst = Map.Make(Int)
 
-let rec project_t get_sexp : ground_lama_t -> TT.t = function
-| TName x -> `Name x
-| TInt -> `Int
-| TString -> `String
-| TArray t -> `Array (project_t get_sexp t)
-| TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
-    get_sexp x, OrigList.map (project_t get_sexp) ts) xs)
+let make_project get_sexp =
+    let prev_tv_idx = Stdlib.ref 0 in
 
-| TArrow (xs, c, ts, t) -> `Arrow
-    ( TT.IS.of_seq @@ OrigList.to_seq xs
-    , OrigList.map (project_c get_sexp) c
-    , OrigList.map (project_t get_sexp) ts
-    , project_t get_sexp t
-    )
+    let new_tv_idx () =
+        let idx = !prev_tv_idx + 1 in
+        prev_tv_idx := idx ;
+        idx
+    in
 
-| TMu (x, t) -> `Mu (x, project_t get_sexp t)
+    let rec inner_scope ?(n=1) sc =
+        if n = 0 then sc else inner_scope ~n:(n - 1) (new_tv_idx () :: sc)
+    in
 
-and project_p get_sexp : ground_lama_p -> TT.p = function
-| PWildcard -> `Wildcard
-| PTyped (t, p) -> `Typed (project_t get_sexp t, project_p get_sexp p)
-| PArray ps -> `Array (OrigList.map (project_p get_sexp) ps)
-| PSexp (x, ps) -> `Sexp (get_sexp x, OrigList.map (project_p get_sexp) ps)
-| PBoxed -> `Boxed
-| PUnboxed -> `Unboxed
-| PStringTag -> `StringTag
-| PArrayTag -> `ArrayTag
-| PSexpTag -> `SexpTag
-| PFunTag -> `FunTag
+    let rec project_t sc : ground_lama_t -> TT.t = function
+    | TName n -> `Name (OrigList.nth sc @@ Nat.to_int n)
+    | TInt -> `Int
+    | TString -> `String
+    | TArray t -> `Array (project_t sc t)
+    | TSexp xs -> `Sexp (OrigList.map (fun (x, ts) ->
+        get_sexp x, OrigList.map (project_t sc) ts) xs)
 
-and project_c get_sexp : ground_lama_c -> TT.c = function
-| CEq (l, r) -> `Eq (project_t get_sexp l, project_t get_sexp r)
-| CInd (l, r) -> `Ind (project_t get_sexp l, project_t get_sexp r)
-| CCall (t, ss, s) -> `Call ( project_t get_sexp t
-                            , OrigList.map (project_t get_sexp) ss, project_t get_sexp s
-                            )
+    | TArrow (n, c, ts, t) ->
+        let n = Nat.to_int n in
+        let sc = inner_scope ~n sc in
+        let xs = TT.IS.of_seq @@ Seq.take n @@ OrigList.to_seq sc in
+        `Arrow (xs, OrigList.map (project_c sc) c, OrigList.map (project_t sc) ts, project_t sc t)
 
-| CMatch (t, ps) -> `Match (project_t get_sexp t, OrigList.map (project_p get_sexp) ps)
-| CSexp (x, t, ts) -> `Sexp ( get_sexp x
-                            , project_t get_sexp t
-                            , OrigList.map (project_t get_sexp) ts
-                            )
+    | TMu t -> let sc = inner_scope sc in `Mu (OrigList.hd sc, project_t sc t)
 
+    and project_p sc : ground_lama_p -> TT.p = function
+    | PWildcard -> `Wildcard
+    | PTyped (t, p) -> `Typed (project_t sc t, project_p sc p)
+    | PArray ps -> `Array (OrigList.map (project_p sc) ps)
+    | PSexp (x, ps) -> `Sexp (get_sexp x, OrigList.map (project_p sc) ps)
+    | PBoxed -> `Boxed
+    | PUnboxed -> `Unboxed
+    | PStringTag -> `StringTag
+    | PArrayTag -> `ArrayTag
+    | PSexpTag -> `SexpTag
+    | PFunTag -> `FunTag
+
+    and project_c sc : ground_lama_c -> TT.c = function
+    | CEq (l, r) -> `Eq (project_t sc l, project_t sc r)
+    | CInd (l, r) -> `Ind (project_t sc l, project_t sc r)
+    | CCall (t, ss, s) -> `Call (project_t sc t, OrigList.map (project_t sc) ss, project_t sc s)
+    | CMatch (t, ps) -> `Match (project_t sc t, OrigList.map (project_p sc) ps)
+    | CSexp (x, t, ts) -> `Sexp (get_sexp x, project_t sc t, OrigList.map (project_t sc) ts)
+    in
+
+    object
+
+        method t = project_t
+        method p = project_p
+        method c = project_c
+    end
+
+module Subst = TT.Subst
 module SM = Map.Make(String)
 
 let make_inject () =
@@ -1148,56 +1260,58 @@ let make_inject () =
         M.return @@ List.cons x xs
     in
 
-    let rec inject_t (bvs : TT.IS.t) : TT.t -> injected_lama_t M.t = function
-    | `Name x when TT.IS.mem x bvs -> M.return @@ tName !!x
-    | `Name x -> begin match Subst.find_opt x !free_vars with
-        | None -> let* fv = call_fresh in free_vars := Subst.add x fv !free_vars ; M.return fv
-        | Some t -> M.return t
+    let rec inject_t (sc : int Subst.t) : TT.t -> injected_lama_t M.t = function
+    | `Name x -> begin match Subst.find_opt x sc with
+        | Some n -> M.return @@ tName @@ Nat.nat @@ Nat.of_int n
+        | None -> begin match Subst.find_opt x !free_vars with
+            | None -> let* fv = call_fresh in free_vars := Subst.add x fv !free_vars ; M.return fv
+            | Some t -> M.return t
+            end
         end
 
     | `Int -> M.return @@ tInt ()
     | `String -> M.return @@ tString ()
-    | `Array t -> let* t = inject_t bvs t in M.return @@ tArray t
-    | `Sexp xs -> let* xs = inject_list (inject_sexp bvs) xs in M.return @@ tSexp xs
+    | `Array t -> let* t = inject_t sc t in M.return @@ tArray t
+    | `Sexp xs -> let* xs = inject_list (inject_sexp sc) xs in M.return @@ tSexp xs
 
     | `Arrow (xs, c, ts, t) ->
-        let bvs = TT.IS.union bvs xs in
+        let n = TT.IS.cardinal xs in
 
-        let xs = GT.foldr GT.list (Fun.flip List.cons) (List.nil ())
-            @@ OrigList.map (!!) @@ TT.IS.elements xs in
+        let sc = Subst.map (fun m -> n + m) sc in
+        let sc = Seq.fold_lefti (fun sc n x -> Subst.add x n sc) sc @@ TT.IS.to_seq xs in
 
-        let* c = inject_list (inject_c bvs) c in
-        let* ts = inject_list (inject_t bvs) ts in
-        let* t = inject_t bvs t in
+        let* c = inject_list (inject_c sc) c in
+        let* ts = inject_list (inject_t sc) ts in
+        let* t = inject_t sc t in
 
-        M.return @@ tArrow xs c ts t
+        M.return @@ tArrow (Nat.nat @@ Nat.of_int n) c ts t
 
     | `Mu (x, t) ->
-        let bvs = TT.IS.add x bvs in
-        let* t = inject_t bvs t in
-        M.return @@ tMu !!x t
+        let sc = Subst.add x 0 @@ Subst.map (fun m -> m + 1) sc in
+        let* t = inject_t sc t in
+        M.return @@ tMu t
 
-    and inject_sexp bvs (x, ts) =
-        let x = cache_sexp x (OrigList.length ts) in
+    and inject_sexp sc (x, ts) =
+        let x = cache_sexp x @@ OrigList.length ts in
 
-        let* ts = inject_list (inject_t bvs) ts in
+        let* ts = inject_list (inject_t sc) ts in
         M.return !!(!!x, ts)
 
-    and inject_p (bvs : TT.IS.t) : TT.p -> injected_lama_p M.t = function
+    and inject_p sc : TT.p -> injected_lama_p M.t = function
     | `Wildcard -> M.return @@ pWildcard ()
     | `Typed (t, p) ->
-        let* t = inject_t bvs t in
-        let* p = inject_p bvs p in
+        let* t = inject_t sc t in
+        let* p = inject_p sc p in
         M.return @@ pTyped t p
 
     | `Array ps ->
-        let* ps = inject_list (inject_p bvs) ps in
+        let* ps = inject_list (inject_p sc) ps in
         M.return @@ pArray ps
 
     | `Sexp (x, ps) ->
-        let x = cache_sexp x (OrigList.length ps) in
+        let x = cache_sexp x @@ OrigList.length ps in
 
-        let* ps = inject_list (inject_p bvs) ps in
+        let* ps = inject_list (inject_p sc) ps in
         M.return @@ pSexp !!x ps
 
     | `Boxed -> M.return @@ pBoxed ()
@@ -1207,33 +1321,33 @@ let make_inject () =
     | `SexpTag -> M.return @@ pSexpTag ()
     | `FunTag -> M.return @@ pFunTag ()
 
-    and inject_c (bvs : TT.IS.t) : TT.c -> injected_lama_c M.t = function
+    and inject_c sc : TT.c -> injected_lama_c M.t = function
     | `Eq (l, r) ->
-        let* l = inject_t bvs l in
-        let* r = inject_t bvs r in
+        let* l = inject_t sc l in
+        let* r = inject_t sc r in
         M.return @@ cEq l r
 
     | `Ind (l, r) ->
-        let* l = inject_t bvs l in
-        let* r = inject_t bvs r in
+        let* l = inject_t sc l in
+        let* r = inject_t sc r in
         M.return @@ cInd l r
 
     | `Call (t, ss, s) ->
-        let* t = inject_t bvs t in
-        let* ss = inject_list (inject_t bvs) ss in
-        let* s = inject_t bvs s in
+        let* t = inject_t sc t in
+        let* ss = inject_list (inject_t sc) ss in
+        let* s = inject_t sc s in
         M.return @@ cCall t ss s
 
     | `Match (t, ps) ->
-        let* t = inject_t bvs t in
-        let* ps = inject_list (inject_p bvs) ps in
+        let* t = inject_t sc t in
+        let* ps = inject_list (inject_p sc) ps in
         M.return @@ cMatch t ps
 
     | `Sexp (x, t, ts) ->
-        let x = cache_sexp x (OrigList.length ts) in
+        let x = cache_sexp x @@ OrigList.length ts in
 
-        let* t = inject_t bvs t in
-        let* ts = inject_list (inject_t bvs) ts in
+        let* t = inject_t sc t in
+        let* ts = inject_list (inject_t sc) ts in
 
         M.return @@ cSexp !!x t ts
     in
@@ -1269,8 +1383,7 @@ let solve (c : TT.c list) : TT.t Subst.t =
     Stream.iter (fun res -> print_endline @@ GT.show logic_lama_c res) res ;
     *)
 
-    let inject_c = inject#list @@ inject#c TT.IS.empty in
-    let make_goal (ans : injected_lama_t List.injected) : goal = inject_c c (fun c ->
+    let make_goal ans : goal = inject#list (inject#c Subst.empty) c (fun c ->
         let free_vars = Subst.to_seq inject#free_vars in
 
         print_string "Free variables: " ;
@@ -1294,48 +1407,6 @@ let solve (c : TT.c list) : TT.t Subst.t =
 
     let res = run q make_goal (fun x -> x#reify @@ List.prj_exn reify_lama_t) in
 
-    (*
-    (* too slow *)
-    (* TODO fix relations and remove set *)
-    let module Ans = struct
-
-        type t = ground_lama_t list
-
-        let compare = GT.compare GT.list (GT.compare ground_lama_t)
-        let compare l r = GT.cmp_to_int @@ compare l r
-    end in
-
-    let module AS = Set.Make(Ans) in
-
-    (*
-    let ans = Stream.fold (fun ans res ->
-        let ans = AS.add (OrigList.map logic_lama_t_to_ground res) ans in
-
-        if AS.cardinal ans > 1
-        then failwith "more than one solution found"
-        else ans
-    ) AS.empty res in
-    *)
-
-    let ans = Stream.fold (fun ans res ->
-        AS.add (OrigList.map logic_lama_t_to_ground res) ans
-    ) AS.empty res in
-
-    let ans = AS.elements ans in
-
-    (* type system has no most general type so we allow multiple different results *)
-
-    let ans = match ans with
-    | [] -> failwith "no one solution found"
-    | [ans] -> ans
-    | ans :: _ as anss ->
-        Printf.printf "More than one solution found:\n" ;
-        OrigList.iter print_endline
-            @@ OrigList.map (GT.show GT.list (GT.show ground_lama_t)) anss ;
-        ans
-    in
-    *)
-
     let ans = Stream.take ~n:1 @@ Stream.map Stdlib.Option.get
         @@ Stream.filter Stdlib.Option.is_some @@ Stream.map (fun ans ->
             try Some (OrigList.map logic_lama_t_to_ground ans)
@@ -1354,7 +1425,9 @@ let solve (c : TT.c list) : TT.t Subst.t =
     let free_vars = Seq.map fst @@ Subst.to_seq inject#free_vars in
 
     let subst = Seq.fold_left (fun subst (v, t) -> Subst.add v t subst) Subst.empty
-        @@ Seq.zip free_vars (OrigList.to_seq ans) in
+        @@ Seq.zip free_vars @@ OrigList.to_seq ans in
+
+    if Subst.cardinal subst <> Seq.length free_vars then failwith "wrong substitution size" ;
 
     let module IM = Map.Make(Int) in
 
@@ -1364,7 +1437,6 @@ let solve (c : TT.c list) : TT.t Subst.t =
     in
 
     let get_sexp x = IM.find x sexp_labels_inv in
+    let project = make_project get_sexp in
 
-    if Subst.cardinal subst <> OrigList.length ans
-    then failwith "wrong substitution size"
-    else Subst.map (project_t get_sexp) subst
+    Subst.map (project#t []) subst
