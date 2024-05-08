@@ -662,16 +662,6 @@ module Type = struct
             let ts = List.map subst_t' @@ List.map snd xts in
             let t = subst_t' t in
 
-            (* TODO maybe convert to de Brujne notation to simplify alpha-equality check? *)
-
-            (*
-            (* naïve approach *)
-            let all_tvs = ftv IS.empty t in
-            let all_tvs = ftv_c all_tvs c in
-            let all_tvs = List.fold_left ftv all_tvs ts in
-            Top, Arrow (IS.diff all_tvs fvs, c, ts, t)
-            *)
-
             let signature_tvs = List.fold_left ftv (ftv IS.empty t) ts in
             let bvs, bc, fc = split_c signature_tvs fvs c in
             fc, `Arrow (bvs, bc, ts, t)

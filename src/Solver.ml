@@ -384,7 +384,13 @@ let rec eq_list eq xs xs' = ocanren
         }
     }
 
-let rec eq_t t t' = ocanren
+let sexp_max_length = Stdlib.ref Int.max_int
+let sexp_max_args = Stdlib.ref Int.max_int
+
+let sexp_x_hlp_ref = Stdlib.ref @@ Obj.magic 0
+let unmu_ref = Stdlib.ref @@ Obj.magic 0
+
+let rec eq_t t t' = let unmu = !unmu_ref in ocanren
     { t == t'
     | t =/= t' &
         { is_var     t & is_var     t' & t == t'
@@ -400,16 +406,37 @@ let rec eq_t t t' = ocanren
                 & t' == TArrow (xs, c', ts', t1') & eq_list eq_c c c'
                 & eq_t_list ts ts' & eq_t t1 t' }
             | { fresh x, t1, t1' in t == TMu (x, t1) & t' == TMu (x, t1') & eq_t t1 t1' }
+            | { fresh t1 in t == TMu (_, _) & t' =/= TMu (_, _) & unmu t t1 & eq_t t1 t' }
+            | { fresh t1' in t =/= TMu (_, _) & t' == TMu (_, _) & unmu t' t1' & eq_t t t1' }
             }
         }
     }
 
-and eq_sexp_hlp =
-    let hlp xts xts' = ocanren {
-        fresh x, ts, ts' in xts == (x, ts) & xts' == (x, ts') & eq_t_list ts ts'
-    } in
+and eq_sexp_hlp xs xs' =
+    let hlp x ts xs' = !sexp_x_hlp_ref x xs' ts in
 
-    fun xs xs' -> eq_list hlp xs xs'
+    let rec hlp_xs xs xs' = ocanren
+        { xs == []
+        | fresh x, ts, xs1 in xs == (x, ts) :: xs1 &
+            { is_not_var x & hlp x ts xs' & hlp_xs xs1 xs'
+            | is_var x
+            }
+        }
+    in
+
+    (*
+    debug_var xs (Fun.flip @@ List.reify @@ Pair.reify reify @@ List.reify reify_lama_t) (fun xs ->
+        debug_var xs' (Fun.flip @@ List.reify @@ Pair.reify reify @@ List.reify reify_lama_t) (fun xs' ->
+            Printf.printf "%s ~sexp~ %s"
+                (GT.show GT.list (GT.show List.logic @@ GT.show Pair.logic
+                    (GT.show logic string_of_int) (GT.show List.logic @@ GT.show logic_lama_t)) xs)
+                (GT.show GT.list (GT.show List.logic @@ GT.show Pair.logic
+                    (GT.show logic string_of_int) (GT.show List.logic @@ GT.show logic_lama_t)) xs') ;
+            print_newline () ;
+            success)) &&&
+    *)
+
+    ocanren { hlp_xs xs xs' & hlp_xs xs' xs }
 
 and eq_t_list ts ts' = eq_list eq_t ts ts'
 
@@ -716,9 +743,6 @@ let rec make_subst xs res = ocanren
     | fresh x, t, xs', res' in xs == x :: xs' & res == (x, t) :: res' & make_subst xs' res'
     }
 
-let sexp_max_length = Stdlib.ref Int.max_int
-let sexp_max_args = Stdlib.ref Int.max_int
-
 type match_t_res =
     ( (injected_lama_t, injected_lama_p) Pair.injected List.injected
     , (injected_lama_t, injected_lama_t) Pair.injected List.injected
@@ -972,6 +996,8 @@ let sexp_x_hlp (x : int ilogic) xs (ts : injected_lama_t List.injected) : goal =
 
     hlp 0 xs
 
+let _ = sexp_x_hlp_ref := sexp_x_hlp
+
 (* unfolds Mu in t if t is exactly Mu in current state *)
 let unmu t t' =
     (*
@@ -988,6 +1014,8 @@ let unmu t t' =
         | fresh x, s in t == TMu (x, s) & subst_t [(x, t)] s t'
         }
     }
+
+let _ = unmu_ref := unmu
 
 let rec ( //- ) c c' : goal =
     let ent_one c c' rest : goal =
