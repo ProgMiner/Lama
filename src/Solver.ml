@@ -390,7 +390,20 @@ let sexp_max_args = Stdlib.ref Int.max_int
 let sexp_x_hlp_ref = Stdlib.ref @@ Obj.magic 0
 let unmu_ref = Stdlib.ref @@ Obj.magic 0
 
-let rec eq_t t t' = let unmu = !unmu_ref in ocanren
+let rec eq_t t t' =
+    let unmu = !unmu_ref in
+
+    (*
+    debug_var t (Fun.flip reify_lama_t) (fun t ->
+        debug_var t' (Fun.flip reify_lama_t) (fun t' ->
+            Printf.printf "%s ~t~ %s"
+                (GT.show GT.list (GT.show logic_lama_t) t)
+                (GT.show GT.list (GT.show logic_lama_t) t') ;
+            print_newline () ;
+            success)) &&&
+    *)
+
+    ocanren
     { t == t'
     | t =/= t' &
         { is_var     t & is_var     t' & t == t'
@@ -930,13 +943,13 @@ let match_t_ast t ps c =
     in
 
     (*
-    debug_var c (Fun.flip reify_lama_c) (fun cs ->
-        debug_var t (Fun.flip reify_lama_t) (fun ts ->
-            debug_var ps (Fun.flip (List.reify reify_lama_p)) (fun pss ->
-                Printf.printf "%s |- matchT*(%s, %s)"
-                    (GT.show GT.list (GT.show logic_lama_c) cs)
-                    (GT.show GT.list (GT.show logic_lama_t) ts)
-                    (GT.show GT.list (GT.show List.logic (GT.show logic_lama_p)) pss)
+    debug_var c (Fun.flip @@ List.reify reify_lama_c) (fun c ->
+        debug_var t (Fun.flip reify_lama_t) (fun t ->
+            debug_var ps (Fun.flip @@ List.reify reify_lama_p) (fun ps ->
+                Printf.printf "matchT*(%s, %s) => %s"
+                    (GT.show GT.list (GT.show logic_lama_t) t)
+                    (GT.show GT.list (GT.show List.logic @@ GT.show logic_lama_p) ps)
+                    (GT.show GT.list (GT.show List.logic @@ GT.show logic_lama_c) c)
                     ;
                 print_newline () ;
                 success))) &&&
