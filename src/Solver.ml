@@ -761,8 +761,8 @@ type match_t_res =
     , (injected_lama_t, injected_lama_t) Pair.injected List.injected
     ) Pair.injected
 
-(* assumes that t is not Mu *)
-let rec match_t t p (res : match_t_res Option.groundi) =
+(* assumes that t is not Mu, st - source type *)
+let rec match_t st t p (res : match_t_res Option.groundi) =
     let some = Option.some in
 
     let wildcard_sexp_hlp =
@@ -836,9 +836,9 @@ let rec match_t t p (res : match_t_res Option.groundi) =
                 }
             }
         }
-    | { fresh s, p', res' in p == PTyped (s, p') & match_t t p' res' &
+    | { fresh s, p', res' in p == PTyped (s, p') & match_t st t p' res' &
         { res' == None & res == None
-        | fresh ps, eqs in res' == some (ps, eqs) & res == some (ps, (t, s) :: eqs) (* MT-Typed *)
+        | fresh ps, eqs in res' == some (ps, eqs) & res == some (ps, (st, s) :: eqs) (* MT-Typed *)
         } }
     | { fresh ps in p == PArray ps &
         { t =/= TArray _ & res == None
@@ -912,8 +912,8 @@ let ind_sexp_hlp xs (t : injected_lama_t) : goal =
 
     f 0 xs
 
-(* assumes that t is not Mu *)
-let match_t_ast t ps c =
+(* assumes that t is not Mu, st - source type *)
+let match_t_ast st t ps c =
     let some = Option.some in
     let o = Nat.o in
     let s = Nat.s in
@@ -926,7 +926,7 @@ let match_t_ast t ps c =
 
     let rec match_hlp ps num tps = ocanren
         { ps == [] & num == o & tps == []
-        | fresh p, ps', res in ps == p :: ps' & match_t t p res &
+        | fresh p, ps', res in ps == p :: ps' & match_t st t p res &
             { res == None & match_hlp ps' num tps
             | fresh tps', tps'', num', eqs in res == some (tps', eqs)
                 & num == s num' & eqs_hlp eqs & List.appendo tps' tps'' tps
@@ -958,14 +958,14 @@ let match_t_ast t ps c =
     ocanren { fresh num, tps, tps' in num =/= o & match_hlp ps num tps
         & group_by_fst tps tps' & match_c_hlp tps' c } (* MT-Ast *)
 
-let match_sexp_hlp ps =
+let match_sexp_hlp st ps =
     let max_length = !sexp_max_length in
 
     let check_n n = if n > max_length then failure else success in
 
     let rec hlp n xs c = let n' = n + 1 in ocanren { check_n n &
         { xs == [] & c == []
-        | fresh xts, xs', c1, c2 in xs == xts :: xs' & match_t_ast (TSexp [xts]) ps c1
+        | fresh xts, xs', c1, c2 in xs == xts :: xs' & match_t_ast st (TSexp [xts]) ps c1
             & List.appendo c1 c2 c & hlp n' xs' c2
         }
     } in
@@ -1071,19 +1071,19 @@ let rec ( //- ) c c' : goal =
             & subst_t s ft t & List.mapo (subst_c s) fc fc' & List.mapo (subst_t s) fts ts
             & now_rest_with fc' } (* C-Call *)
         | { fresh t, ps, c'' in c' == CMatch (t, ps) & unmu t TInt
-            & match_t_ast TInt ps c'' & now_rest_with c'' } (* C-MatchInt *)
+            & match_t_ast t TInt ps c'' & now_rest_with c'' } (* C-MatchInt *)
         | { fresh t, ps, c'' in c' == CMatch (t, ps) & unmu t TString
-            & match_t_ast TString ps c'' & now_rest_with c'' } (* C-MatchString *)
+            & match_t_ast t TString ps c'' & now_rest_with c'' } (* C-MatchString *)
         | { fresh t, t', ps, c'' in c' == CMatch (t, ps) & unmu t (TArray t')
-            & match_t_ast (TArray t') ps c'' & now_rest_with c'' } (* C-MatchArray *)
+            & match_t_ast t (TArray t') ps c'' & now_rest_with c'' } (* C-MatchArray *)
         | { fresh t, xs, ps, c'' in c' == CMatch (t, ps) & unmu t (TSexp xs)
-            & match_sexp_hlp ps xs c'' & now_rest_with c'' } (* C-MatchSexp *)
+            & match_sexp_hlp t ps xs c'' & now_rest_with c'' } (* C-MatchSexp *)
         | { fresh f, fxs, fc, fts, ft, ps, c'' in c' == CMatch (f, ps)
             & unmu f (TArrow (fxs, fc, fts, ft))
-            & match_t_ast (TArrow (fxs, fc, fts, ft)) ps c''
+            & match_t_ast f (TArrow (fxs, fc, fts, ft)) ps c''
             & now_rest_with c'' } (* C-MatchFun *)
         | { fresh x, t, ps, c'' in c' == CMatch (TMu (x, t), ps) & is_not_var x
-            & match_t_ast (TMu (x, t)) ps c'' & now_rest_with c'' } (* hack for Mu *)
+            & match_t_ast (TMu (x, t)) (TMu (x, t)) ps c'' & now_rest_with c'' } (* hack for Mu *)
         | { fresh t, x, xs, ts in c' == CSexp (x, t, ts) & unmu t (TSexp xs)
             & sexp_x_hlp x xs ts & now_rest } (* C-Sexp *)
         }
