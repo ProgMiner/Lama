@@ -1,0 +1,61 @@
+
+\func Var => Nat
+\func Loc => Nat
+\func Label => Nat
+\func String => Array Int
+
+\data Binop
+  | bPlus
+  | bMinus
+  | bMul
+  -- | bDiv
+  -- | bRem
+  | bEq
+  | bNe
+  | bLt
+  | bLe
+  | bGt
+  | bGe
+
+\data Pattern
+  | pWildcard
+  | pNamed Var Pattern
+  | pArray {n : Nat} (Array Pattern n)
+  | pSexp Label {n : Nat} (Array Pattern n)
+  | pInt Int
+  | pString String
+  | pBoxed
+  | pUnboxed
+  | pStringShape
+  | pArrayShape
+  | pSexpShape
+  | pFunShape
+
+\data Expr : \Set
+  | eScope {n : Nat} (Array Def n) Expr
+  | eSeq Expr Expr
+  | eAssign Expr Expr
+  | eBinop Binop Expr Expr
+  | eCall Expr {n : Nat} (Array Expr n)
+  | eSubscript Expr Expr
+  | eVar Var
+  | eInt Int
+  | eString String
+  | eFun (Array Var) Expr
+  | eSkip
+  | eArray {n : Nat} (Array Expr n)
+  | eSexp Label {n : Nat} (Array Expr n)
+  | eIf Expr Expr Expr
+  | eWhile Expr Expr
+  | eDo Expr Expr
+  | eCase Expr {n : Nat} (Array (\Sigma Pattern Expr) n)
+
+\data Def : \Set
+  | dVar Var Expr
+  | dFun Var (Array Var) Expr
+  \where {
+
+    \func var (d : Def) : Var \elim d
+      | dVar v _ => v
+      | dFun v _ _ => v
+  }

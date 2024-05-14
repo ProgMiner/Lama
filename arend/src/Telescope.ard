@@ -1,0 +1,229 @@
+\import Data.Array
+\import Data.Bool
+\import Data.Or
+\import Equiv
+\import Function
+\import Function.Meta ($)
+\import Logic
+\import Logic.Meta
+\import Meta
+\import Paths
+\import Paths.Meta
+\import Relation.Equivalence
+\import Set
+
+\func Telescope (K : DecSet) (V : \Set) => Quotient {Telescope' K V} R
+  \where {
+
+    \func Telescope' (K : DecSet) (V : \Set) => Array (\Sigma K V)
+
+    \data Get' {K : DecSet} {V : \Set} (sc : Telescope' K V) (k : K) (v : V) \elim sc
+      | (k', v') :: _ => getHead (k = k') (v = v')
+      | (k', _) :: sc => getTail (k /= k') (Get' sc k v)
+      \where {
+
+        \use \level levelProp {K : DecSet} {V : \Set} {sc : Telescope' K V} {k : K} {v : V} (p q : Get' sc k v)
+          : p = q \elim sc, p, q
+          | (_, _) :: _, getHead _ _, getHead _ _ => pmap2 getHead propPath propPath
+          | (_, _) :: _, getHead p _, getTail n _ => \case n p
+          | (_, _) :: _, getTail n _, getHead p _ => \case n p
+          | (_, _) :: _, getTail _ _, getTail _ _ => pmap2 getTail propPath (levelProp _ _)
+
+        \func functionality {K : DecSet} {V : \Set} {sc : Telescope' K V} {k : K} {v v' : V}
+                            (p : Get' sc k v) (p' : Get' sc k v')
+          : v = v' \elim sc, p, p'
+          | (_, x1) :: _, getHead _ p, getHead _ q => p *> inv q
+          | (v1, _) :: _, getHead p _, getTail n _ => \case n p
+          | (v1, _) :: _, getTail n _, getHead p _ => \case n p
+          | (_, _) :: sc1, getTail _ p, getTail _ p' => functionality p p'
+
+        \func functionality' {K : DecSet} {V : \Set} (sc : Telescope' K V) (k : K)
+          : Equiv {\Sigma (v : V) (Get' sc k v)} {∃ (v : V) (Get' sc k v)} \cowith
+          | f => inP
+          | ret => find
+          | ret_f (p : \Sigma (v : V) (Get' sc k v)) : find (inP p) = p \elim sc, p {
+            | nil, (_, ())
+            | (k', v') :: sc, (v, p) => cases (decideEq k k') \with {
+              | yes e => ext $ functionality (getHead e idp) p
+              | no n => cases p \with {
+                | getHead p _ => \case n p
+                | getTail n' p => ext $ rewrite (ret_f (v, p)) idp
+              }
+            }
+          }
+          | sec => find
+          | f_sec _ => propPath
+          \where {
+
+            \func find {K : DecSet} {V : \Set} {k : K} {sc : Telescope' K V} (p : ∃ (v : V) (Get' sc k v))
+              : \Sigma (v : V) (Get' sc k v) \elim sc
+              | nil => absurd $ \case p \with {
+                | inP (_, ())
+              }
+              | (k', v) :: sc => find' p (decideEq k k')
+
+            \func find' {K : DecSet} {V : \Set} {k k' : K} {v' : V} {sc : Telescope' K V}
+                        (p : ∃ (v : V) (Get' ((k', v') :: sc) k v)) (q : Dec (k = k'))
+              : \Sigma (v : V) (Get' ((k', v') :: sc) k v) \elim q
+              | yes e => (v', getHead e idp)
+              | no n => \case find {_} {_} {k} {sc} (\case p \with {
+                | inP (_, getHead p _) => \case n p
+                | inP (v, getTail _ p) => inP (v, p)
+              }) \with {
+                | (v', p') => (v', getTail n p')
+              }
+          }
+
+        \instance Get'Dec {K : DecSet} {V : \Set} (sc : Telescope' K V) (k : K) : Decide (∃ (v : V) (Get' sc k v))
+          | decide => find k sc
+          \where {
+
+            \func find {K : DecSet} {V : \Set} (k : K) (sc : Telescope' K V) : Dec (∃ (v : V) (Get' sc k v)) \elim sc
+              | nil => no $ \lam (inP (_, ()))
+              | (k', v') :: sc => \case decideEq k k' \with {
+                | yes e => yes $ inP (v', getHead e idp)
+                | no n => \case find k sc \with {
+                  | yes (inP (v, p)) => yes $ inP (v, getTail n p)
+                  | no n' => no $ \lam (inP (v, p)) => \case p \with {
+                    | getHead p _ => \case n p
+                    | getTail _ p => \case n' $ inP (v, p)
+                  }
+                }
+              }
+          }
+
+        \func fromPrefix {K : DecSet} {V : \Set} {sc1 : Telescope' K V} (sc2 : Telescope' K V)
+                         {k : K} {v : V} (p : Get' sc1 k v)
+          : Get' (sc1 ++ sc2) k v \elim sc1, p
+          | (k', v') :: sc1, getHead p p1 => getHead p p1
+          | (k', v') :: sc1, getTail n p => getTail n $ fromPrefix _ p
+
+        \func fromSuffix {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} {k : K} {v : V} (p : Get' sc2 k v)
+                         (n : \Pi (v : V) -> Not (Get' sc1 k v))
+          : Get' (sc1 ++ sc2) k v \elim sc1
+          | nil => p
+          | (k', v') :: sc1 =>
+            \let q : k /= k' => \lam q => n v' $ getHead q idp
+            \in getTail q $ fromSuffix p (\lam x1 g => n x1 (getTail q g))
+
+        \func ofConcat {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} {k : K} {v : V} (p : Get' (sc1 ++ sc2) k v)
+          : Or (Get' sc1 k v) (\Sigma (\Pi (v : V) -> Not (Get' sc1 k v)) (Get' sc2 k v)) \elim sc1, p
+          | nil, p => inr (\lam _ g => contradiction g, p)
+          | (k', v') :: sc1, getHead p p1 => inl $ getHead p p1
+          | (k', v') :: sc1, getTail n p => \case ofConcat p \with {
+            | inl a => inl $ getTail n a
+            | inr (n', g) => inr (\lam x1 g1 => \case g1 \with {
+              | getHead p1 _ => \case n p1
+              | getTail _ g2 => n' x1 g2
+            }, g)
+          }
+      }
+
+    \func R {K : DecSet} {V : \Set} (sc1 sc2 : Telescope' K V) => \Pi (k : K) (v : V) -> Get' sc1 k v <-> Get' sc2 k v
+      \where {
+
+        \instance REq {K : DecSet} {V : \Set} : Equivalence (Telescope' K V)
+          | ~ => R
+          | ~-reflexive {sc} k v => (id, id)
+          | ~-symmetric {sc1} {sc2} r k v => ((r k v).2, (r k v).1)
+          | ~-transitive {sc1} {sc2} {sc3} r1 r2 k v => ((r2 k v).1 o (r1 k v).1, (r1 k v).2 o (r2 k v).2)
+      }
+
+    \func Get {K : DecSet} {V : \Set} (sc : Telescope K V) (k : K) (v : V) : \Prop \elim sc
+      | in~ sc => Get' sc k v
+      | ~-equiv sc1 sc2 r => propExt (r k v).1 (r k v).2
+
+    \func set {K : DecSet} {V : \Set} (k : K) (v : V) (sc : Telescope K V) : Telescope K V \elim sc
+      | in~ sc => in~ $ (k, v) :: sc
+      | ~-equiv sc1 sc2 r => path $ ~-equiv _ _ $ \lam k' v' => (set-=> k' v' r, set-=> k' v' $ R.REq.~-symmetric r)
+      \where {
+
+        \func set-=> {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} {k : K} {v : V} (k' : K) (v' : V)
+                     (r : R sc1 sc2) (p : Get' ((k, v) :: sc1) k' v')
+          : Get' ((k, v) :: sc2) k' v' \elim p
+          | getHead idp idp => getHead idp idp
+          | getTail n p => getTail n $ (r _ _).1 p
+      }
+
+    \func concat {K : DecSet} {V : \Set} (sc1 sc2 : Telescope K V) : Telescope K V \elim sc2
+      | in~ sc2 => concat' sc1 sc2
+      | ~-equiv sc2 sc2' r => cases sc1 \with {
+        | in~ sc1 => path $ ~-equiv _ _ $ concat-lem r
+      }
+      \where {
+
+        \func concat' {K : DecSet} {V : \Set} (sc1 : Telescope K V) (sc2 : Telescope' K V) : Telescope K V \elim sc1
+          | in~ sc1 => in~ $ sc1 ++ sc2
+          | ~-equiv sc1 sc1' r => path $ ~-equiv _ _ $ concat'-lem r
+
+        \func concat'-lem {K : DecSet} {V : \Set} {sc1 sc1' sc2 : Telescope' K V} (r : R sc1 sc1')
+          : R (sc1 ++ sc2) (sc1' ++ sc2) => \lam k v => (concat'-lem-=> r, concat'-lem-=> $ R.REq.~-symmetric r)
+          \where {
+
+            \func concat'-lem-=> {K : DecSet} {V : \Set} {sc1 sc1' sc2 : Telescope' K V} {k : K} {v : V}
+                                 (r : R sc1 sc1') (p : Get' (sc1 ++ sc2) k v)
+              : Get' (sc1' ++ sc2) k v => \case Get'.ofConcat p \with {
+              | inl a => Get'.fromPrefix sc2 $ (r k v).1 a
+              | inr (n, g) => Get'.fromSuffix g (\lam x1 g1 => n x1 $ (r k x1).2 g1)
+            }
+          }
+
+        \func concat-lem {K : DecSet} {V : \Set} {sc1 sc2 sc2' : Telescope' K V} (r : R sc2 sc2')
+          : R (sc1 ++ sc2) (sc1 ++ sc2') => \lam k v => (concat-lem-=> r, concat-lem-=> $ R.REq.~-symmetric r)
+          \where {
+
+            \func concat-lem-=> {K : DecSet} {V : \Set} {sc1 sc2 sc2' : Telescope' K V} {k : K} {v : V}
+                                (r : R sc2 sc2') (p : Get' (sc1 ++ sc2) k v)
+              : Get' (sc1 ++ sc2') k v => \case Get'.ofConcat p \with {
+              | inl a => Get'.fromPrefix _ a
+              | inr (n, g) => Get'.fromSuffix ((r k v).1 g) n
+            }
+          }
+      }
+
+    \func unset {K : DecSet} {V : \Set} (k : K) (sc : Telescope K V) : Telescope K V \elim sc
+      | in~ sc => in~ $ unset' k sc
+      | ~-equiv sc sc' r => path $ ~-equiv _ _ $ \lam k' v => (unset-=> k' k v r, unset-=> k' k v $ R.REq.~-symmetric r)
+      \where {
+
+        \func unset' {K : DecSet} {V : \Set} (k : K) (sc : Telescope' K V) : Telescope' K V
+          => filter (\lam (k', _) => not $ decToBool $ decideEq k k') sc
+
+        \func unset'-lem {K : DecSet} {V : \Set} {k k0 : K} {v : V} {sc : Telescope' K V}
+          : Get' (unset' k0 sc) k v <-> (\Sigma (Get' sc k v) (k /= k0))
+          => (unset'-lem-=> k0 sc, \lam (p, q) => unset'-lem-<= k0 sc p q)
+          \where {
+            \func unset'-lem-=> {K : DecSet} {V : \Set} (v0 : K) (sc : Telescope' K V)
+                                {k : K} {v : V} (p : Get' (unset' v0 sc) k v)
+              : \Sigma (Get' sc k v) (k /= v0) \elim sc
+              | nil => \case p
+              | (k', v') :: sc => \case
+                decideEq v0 k' \as dec,
+                p : Get' (if (not $ decToBool dec) ((k', v') :: unset' v0 sc) (unset' v0 sc)) k v
+              \with {
+                | yes e, p => \let (p', n) => unset'-lem-=> v0 sc p \in (getTail (\lam q => n $ q *> inv e) p', n)
+                | no n, getHead p1 p2 => (getHead p1 p2, \lam q => n $ inv q *> p1)
+                | no n, getTail n' p => \let (p', n'') => unset'-lem-=> v0 sc p \in (getTail n' p', n'')
+              }
+
+            \func unset'-lem-<= {K : DecSet} {V : \Set} (k0 : K) (sc : Telescope' K V)
+                                {k : K} {v : V} (p : Get' sc k v) (q : k /= k0)
+              : Get' (unset' k0 sc) k v \elim sc, p
+              | (k', v') :: sc1, getHead p p1 => unfold unset'
+                  $ rewrite (decideEq/=_reduce (\lam p' => q $ p *> inv p'))
+                  $ getHead p p1
+              | (k', v') :: sc, getTail n p => unfold unset' $ cases (decideEq k0 k') \with {
+                | yes e => unset'-lem-<= k0 sc p q
+                | no n' => getTail n $ unset'-lem-<= k0 sc p q
+              }
+          }
+
+        \func unset-=> {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} (k k0 : K) (v : V)
+                       (r : R sc1 sc2) (p : Get' (unset' k0 sc1) k v)
+          : Get' (unset' k0 sc2) k v => \let (p', q) => unset'-lem.1 p \in unset'-lem.2 ((r k v).1 p', q)
+      }
+
+    \func erase {K : DecSet} {V : \Set} (ks : Array K) (sc : Telescope K V) : Telescope K V \elim ks
+      | nil => sc
+      | k :: ks => unset k $ erase ks sc
+  }

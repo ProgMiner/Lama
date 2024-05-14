@@ -1,0 +1,180 @@
+\import Arith.Int
+\import Data.Array
+\import Function
+\import Expr
+\import Memory
+\import Scope
+\import Telescope
+\import Logic
+\import Logic.Meta
+\import Paths
+\import Relation.Equivalence
+
+\func State => \Sigma Scope Memory
+
+\data EvalBinop (b : Binop) (x y z : Int) \elim b
+  | bPlus => ebPlus (z = x IntRing.+ y)
+  | bMinus => ebMinus (z = x IntRing.+ IntRing.negative y)
+  | bMul => ebMul (z = x IntRing.* y)
+  | bEq => ebEqTrue (x = y) (z = 1)
+  | bEq => ebEqFalse (x /= y) (z = 0)
+  | bNe => ebNeTrue (x /= y) (z = 1)
+  | bNe => ebNeFalse (x = y) (z = 0)
+  | bLt => ebLtTrue (x IntRing.< y) (z = 1)
+  | bLt => ebLtFalse (x IntRing.>= y) (z = 0)
+  | bLe => ebLeTrue (x IntRing.<= y) (z = 1)
+  | bLe => ebLeFalse (x IntRing.> y) (z = 0)
+  | bGt => ebGtTrue (x IntRing.> y) (z = 1)
+  | bGt => ebGtFalse (x IntRing.<= y) (z = 0)
+  | bGe => ebGeTrue (x IntRing.>= y) (z = 1)
+  | bGe => ebGeFalse (x IntRing.< y) (z = 0)
+  \where {
+
+    \use \level levelProp {b : Binop} {x y z : Int} (p q : EvalBinop b x y z) : p = q \elim b, p, q
+      | bPlus, ebPlus p, ebPlus q => pmap ebPlus propPath
+      | bMinus, ebMinus p, ebMinus q => pmap ebMinus propPath
+      | bMul, ebMul p, ebMul q => pmap ebMul propPath
+      | bEq, ebEqTrue p p1, ebEqTrue q q1 => pmap2 ebEqTrue propPath propPath
+      | bEq, ebEqTrue p p1, ebEqFalse q q1 => \case q p
+      | bEq, ebEqFalse p p1, ebEqTrue q q1 => \case p q
+      | bEq, ebEqFalse p p1, ebEqFalse q q1 => pmap2 ebEqFalse propPath propPath
+      | bNe, ebNeTrue p p1, ebNeTrue q q1 => pmap2 ebNeTrue propPath propPath
+      | bNe, ebNeTrue p p1, ebNeFalse q q1 => \case p q
+      | bNe, ebNeFalse p p1, ebNeTrue q q1 => \case q p
+      | bNe, ebNeFalse p p1, ebNeFalse q q1 => pmap2 ebNeFalse propPath propPath
+      | bLt, ebLtTrue p p1, ebLtTrue q q1 => pmap2 ebLtTrue propPath propPath
+      | bLt, ebLtTrue p p1, ebLtFalse q q1 => contradiction
+      | bLt, ebLtFalse p p1, ebLtTrue q q1 => contradiction
+      | bLt, ebLtFalse p p1, ebLtFalse q q1 => pmap2 ebLtFalse propPath propPath
+      | bLe, ebLeTrue p p1, ebLeTrue q q1 => pmap2 ebLeTrue propPath propPath
+      | bLe, ebLeTrue p p1, ebLeFalse q q1 => contradiction
+      | bLe, ebLeFalse p p1, ebLeTrue q q1 => contradiction
+      | bLe, ebLeFalse p p1, ebLeFalse q q1 => pmap2 ebLeFalse propPath propPath
+      | bGt, ebGtTrue p p1, ebGtTrue q q1 => pmap2 ebGtTrue propPath propPath
+      | bGt, ebGtTrue p p1, ebGtFalse q q1 => contradiction
+      | bGt, ebGtFalse p p1, ebGtTrue q q1 => contradiction
+      | bGt, ebGtFalse p p1, ebGtFalse q q1 => pmap2 ebGtFalse propPath propPath
+      | bGe, ebGeTrue p p1, ebGeTrue q q1 => pmap2 ebGeTrue propPath propPath
+      | bGe, ebGeTrue p p1, ebGeFalse q q1 => contradiction
+      | bGe, ebGeFalse p p1, ebGeTrue q q1 => contradiction
+      | bGe, ebGeFalse p p1, ebGeFalse q q1 => pmap2 ebGeFalse propPath propPath
+  }
+
+\data Match (m : Memory) (x : Value) (p : Pattern) (sc : Scope.Scope') \elim x, p, sc
+  | _, pWildcard, nil => mWildcard
+  | x, pNamed v p, sc' => mNamed {sc : Scope.Scope'} (Match m x p sc) (sc' = sc ++ (v, x) :: nil)
+  | vLoc l, pArray {n} ps, sc' => mArray {xs : Array Value n} {scs : Array Scope.Scope' n}
+                                         (Telescope.Get m l (bvArray xs))
+                                         (DArray {n} (\lam i => Match m (xs i) (ps i) (scs i)))
+                                         (sc' = fold (\lam (sc : Scope.Scope') acc => acc ++ sc) (nil : Scope.Scope') scs)
+  | vLoc l, pSexp lb {n} ps, sc' => mSexp {xs : Array Value n} {scs : Array Scope.Scope' n}
+                                          (Telescope.Get m l (bvSexp lb xs))
+                                          (DArray {n} (\lam i => Match m (xs i) (ps i) (scs i)))
+                                          (sc' = fold (\lam (sc : Scope.Scope') acc => acc ++ sc) (nil : Scope.Scope') scs)
+  | vInt x, pInt y, nil => mInt (x = y)
+  | vLoc l, pString s, nil => mString (Telescope.Get m l (bvString s))
+  | vLoc _, pBoxed, nil => mBoxed
+  | vInt _, pUnboxed, nil => mUnboxed
+  | vLoc l, pStringShape, nil => mStringShape {s : String} (Telescope.Get m l (bvString s))
+  | vLoc l, pArrayShape, nil => mArrayShape {xs : Array Value} (Telescope.Get m l (bvArray xs))
+  | vLoc l, pSexpShape, nil => mSexpShape {lb : Label} {xs : Array Value} (Telescope.Get m l (bvSexp lb xs))
+  | vLoc l, pFunShape, nil => mFunShape {e : Expr} {xs : Array Var} {cl : Scope} (Telescope.Get m l (bvFun e xs cl))
+  \where {
+
+    \use \level levelProp {m : Memory} {x : Value} {pat : Pattern} {sc : Scope.Scope'} (p q : Match m x pat sc)
+      : p = q \elim x, pat, sc, p, q
+      | _, pWildcard, nil, mWildcard, mWildcard => idp
+      | x, pNamed v pat, sc, mNamed {sc1} p1 p2, mNamed {sc2} q1 q2 => {?}
+      | vLoc l, pArray ps, sc, mArray g d p1, mArray g1 d1 p2 => {?}
+      | vLoc l, pSexp lb ps, sc1, mSexp g d p1, mSexp g1 d1 p2 => {?}
+      | vInt x, pInt y, nil, mInt p1, mInt p2 => pmap mInt propPath
+      | vLoc l, pString s, nil, mString g, mString g1 => {?}
+      | vLoc l, pBoxed, nil, mBoxed, mBoxed => idp
+      | vInt i, pUnboxed, nil, mUnboxed, mUnboxed => idp
+      | vLoc l, pStringShape, nil, mStringShape {s1} g, mStringShape {s2} g1 => {?}
+      | vLoc l, pArrayShape, nil, mArrayShape g, mArrayShape g1 => {?}
+      | vLoc l, pSexpShape, sc1, p1, q => {?}
+      | vLoc l, pFunShape, sc1, p1, q => {?}
+  }
+
+-- (old state, closure) == expr ==> (value, new state)
+\data Eval (st : State) (cl : Scope) (e : Expr) (v : Value) (st' : State) : \Set \elim st, e, v, st'
+  | (sc, m), eScope ds e, x, (sc', m') => evScope {st : State} {sc1 : Scope}
+                                                  (EvalDef* (Scope.init (Def.var o ds) sc, m) cl ds st)
+                                                  (Eval st cl e x (Telescope.concat sc1 sc', m'))
+                                                  (sc' = Telescope.erase (Def.var o ds) (Telescope.concat sc1 sc'))
+  | st, eSeq e1 e2, v2, st'' => evSeq {st' : State} {v1 : Value} (Eval st cl e1 v1 st') (Eval st' cl e2 v2 st'')
+  | st, eAssign e1 e2, x, (sc', m) => evAssignVar {v : Var} {st' : State} {sc : Scope}
+                                                  (EvalRef st cl e1 (rVar v) st')
+                                                  (Eval st' cl e2 x (sc, m))
+                                                  (sc' = Telescope.set v x sc)
+  | st, eAssign e1 e2, x, (sc, m') => evAssignMem {l : Loc} {i : Nat} {st' : State} {m : Memory} {bv1 bv2 : BoxedValue}
+                                                  (EvalRef st cl e1 (rElem l i) st')
+                                                  (Eval st' cl e2 x (sc, m))
+                                                  (Telescope.Get m l bv1) (BoxedValue.Set i x bv1 bv2)
+                                                  (m' = Telescope.set l bv2 m)
+  | st, eBinop b e1 e2, vInt x, st'' => evBinop {st' : State} {v1 v2 : Int}
+                                                (Eval st cl e1 (vInt v1) st') (Eval st' cl e2 (vInt v2) st'')
+                                                (EvalBinop b v1 v2 x)
+  | st, eCall f {n} xs, x, st'' => evCall {l : Loc} {f' : Expr} {st' : State} {xs' : Array Value n}
+                                          {vs : Array Var n} {sc cl' : Scope} {m : Memory}
+                                          (Eval st cl f (vLoc l) st') (Eval* st' cl xs xs' (sc, m))
+                                          (Telescope.Get m l (bvFun f' vs cl')) (Eval (Scope.args vs xs', m) cl' f' x st'')
+  | st, eSubscript e1 e2, x, (sc, m) => evSubscript {l : Loc} {st' : State} {i : Nat} {bv : BoxedValue}
+                                                    (Eval st cl e1 (vLoc l) st') (Eval st' cl e2 (vInt i) (sc, m))
+                                                    (Telescope.Get m l bv) (BoxedValue.Get i x bv)
+  | (sc, m), eVar v, x, st' => evVarScope (st' = (sc, m)) (Telescope.Get sc v x)
+  | (sc, m), eVar v, x, st' => evVarClosure (st' = (sc, m)) (Not (\Pi (x : Value) -> Telescope.Get sc v x))
+                                            (Telescope.Get cl v x)
+  | st, eInt n, vInt n', st' => evInt (st = st') (n = n')
+  | (sc, m), eString s, vLoc l, (sc', m') => evString (sc = sc') (m' = Telescope.set l (bvString s) m)
+                                                      (Not (\Pi (x : BoxedValue) -> Telescope.Get m l x))
+  | (sc, m), eFun vs e, vLoc l, (sc', m') => evFun (sc = sc') (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
+                                                   (Not (\Pi (x : BoxedValue) -> Telescope.Get m l x))
+  | st, eSkip, vInt 0, st' => evSkip (st = st')
+  | st, eArray {n} xs, vLoc l, (sc, m') => evArray {xs' : Array Value n} {m : Memory}
+                                                   (Eval* st cl xs xs' (sc, m)) (m' = Telescope.set l (bvArray xs') m)
+                                                   (Not (\Pi (x : BoxedValue) -> Telescope.Get m l x))
+  | st, eSexp lb {n} xs, vLoc l, (sc, m') => evSexp {xs' : Array Value n} {m : Memory}
+                                                    (Eval* st cl xs xs' (sc, m)) (m' = Telescope.set l (bvSexp lb xs') m)
+                                                    (Not (\Pi (x : BoxedValue) -> Telescope.Get m l x))
+  | st, eIf c t _, x, st'' => evIfTrue {c' : Int} {st' : State} (Eval st cl c (vInt c') st')
+                                       (c' /= 0) (Eval st' cl t x st'')
+  | st, eIf c _ f, x, st'' => evIfFalse {st' : State} (Eval st cl c (vInt 0) st') (Eval st' cl f x st'')
+  | st, eWhile c b, x, st'' => evWhileTrue {c' : Int} {st' : State} (Eval st cl c (vInt c') st')
+                                           (c' /= 0) (Eval st' cl (eWhile c b) x st'')
+  | st, eWhile c _, vInt 0, st' => evWhileFalse (Eval st cl c (vInt 0) st')
+  | st, eDo b c, x, st''' => evDoTrue {x' : Value} {c' : Int} {st' st'' : State} (Eval st cl b x' st')
+                                      (Eval st' cl c (vInt c') st'') (c' /= 0) (Eval st'' cl (eDo b c) x st''')
+  | st, eDo b c, vInt 0, st'' => evDoFalse {x' : Value} {st' : State} (Eval st cl b x' st')
+                                           (Eval st' cl c (vInt 0) st'')
+  | st, eCase e {n} pbs, x, st'' => evCase {x' : Value} {st' : State} (Eval st cl e x' st')
+                                           (EvalCase st' cl x' pbs x st'')
+
+-- multiple expressions evaluation left to right
+\data Eval* (st : State) (cl : Scope) {n : Nat} (es : Array Expr n) (xs : Array Value n) (st' : State) : \Set
+\elim st, n, es, xs, st'
+  | st, 0, nil, nil, st' => ev*Nil (st = st')
+  | st, suc _, e :: es, x :: xs, st'' => ev*Cons {st' : State} (Eval st cl e x st') (Eval* st' cl es xs st'')
+
+\data EvalRef (st : State) (cl : Scope) (e : Expr) (r : Ref) (st' : State) : \Set \elim st, e, r, st'
+  | st, eVar v, rVar v', st' => erVar (st = st') (v = v')
+  | st, eSubscript t1 t2, rElem l i, st'' => erSubscript {st' : State} (Eval st cl t1 (vLoc l) st')
+                                                         (Eval st' cl t2 (vInt i) st'')
+
+\data EvalDef (st : State) (cl : Scope) (d : Def) (st' : State) : \Set \elim st, d, st'
+  | st, dVar v e, (sc', m) => edVar {x : Value} {sc : Scope} (Eval st cl e x (sc, m)) (sc' = Telescope.set v x sc)
+  | (sc, m), dFun v vs e, (sc', m') => edFun {l : Loc} (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
+                                             (sc' = Telescope.set v (vLoc l) sc)
+
+\data EvalDef* (st : State) (cl : Scope) {n : Nat} (ds : Array Def n) (st' : State) : \Set \elim st, n, ds, st'
+  | st, 0, nil, st' => ed*Nil (st = st')
+  | st, suc _, d :: ds, st'' => ed*Cons {st' : State} (EvalDef st cl d st') (EvalDef* st' cl ds st'')
+
+\data EvalCase (st : State) (cl : Scope) (x : Value) {n : Nat} (pbs : Array (\Sigma Pattern Expr) n)
+               (y : Value) (st' : State) : \Set \elim st, n, pbs, st'
+  | (sc, m), suc _, (p, e) :: pbs, (sc', m') => ecHead {sc1 : Scope.Scope'} {sc2 : Scope} (Match m x p sc1)
+                                                       (Eval (Telescope.concat (in~ sc1) sc, m) cl e y (Telescope.concat sc2 sc', m'))
+                                                       (sc' = Telescope.erase ((\lam p => p.1) o sc1) (Telescope.concat sc2 sc'))
+  | (sc, m), suc _, (p, _) :: pbs, st' => ecTail (\Pi (sc : Scope.Scope') -> Not (Match m x p sc))
+                                                 (EvalCase (sc, m) cl x pbs y st')

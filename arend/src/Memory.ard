@@ -1,0 +1,128 @@
+\import Arith.Nat
+\import Function.Meta
+\import Expr
+\import Scope
+\import Telescope
+\import Logic
+\import Paths
+\import Set (DecSet)
+
+\data BoxedValue
+  | bvString String
+  | bvArray (Array Value)
+  | bvSexp Label (Array Value)
+  | bvFun Expr (Array Var) Scope
+  \where {
+
+    \data Get (i : Nat) (y : Value) (x : BoxedValue) \elim x
+      | bvString s => getString {i' : Fin _} (i = {Nat} i') (y = s i')
+      | bvArray xs => getArray {i' : Fin _} (i = {Nat} i') (y = xs i')
+      | bvSexp _ xs => getSexp {i' : Fin _} (i = {Nat} i') (y = xs i')
+      \where {
+
+        \use \level levelProp {i : Nat} {y : Value} {x : BoxedValue} (p q : Get i y x) : p = q \elim x, p, q
+          | bvString s, getString p1 q1, getString p2 q2 => getStringLem p1 p2 q1 q2
+          | bvArray xs, getArray p1 q1, getArray p2 q2 => getArrayLem p1 p2 q1 q2
+          | bvSexp l xs, getSexp p1 q1, getSexp p2 q2 => getSexpLem p1 p2 q1 q2
+          \where {
+
+            \func getStringLem {s : String} {i1 i2 : Fin s.len} {i : Nat} {y : Value}
+                               (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (q1 : y = s i1) (q2 : y = s i2)
+              : getString p1 q1 = {Get i y (bvString s)} getString p2 q2 \elim p1, p2, q1
+              | idp, idp, idp => pmap (getString _) propPath
+
+            \func getArrayLem {xs : Array Value} {i1 i2 : Fin xs.len} {i : Nat} {y : Value}
+                              (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (q1 : y = xs i1) (q2 : y = xs i2)
+              : getArray p1 q1 = {Get i y (bvArray xs)} getArray p2 q2 \elim p1, p2, q1
+              | idp, idp, idp => pmap (getArray _) propPath
+
+            \func getSexpLem {xs : Array Value} {i1 i2 : Fin xs.len} {i : Nat} {y : Value} {l : Label}
+                             (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (q1 : y = xs i1) (q2 : y = xs i2)
+              : getSexp p1 q1 = {Get i y (bvSexp l xs)} getSexp p2 q2 \elim p1, p2, q1
+              | idp, idp, idp => pmap (getSexp _) propPath
+          }
+      }
+
+    \data Set (i : Nat) (y : Value) (x x' : BoxedValue) \elim y, x, x'
+      | vInt y, bvString s, bvString s' => setString {i' : Fin _} (i = {Nat} i') (p : DArray.len {s} = DArray.len {s'})
+                                                     (\Pi (j : Fin _) -> (j /= i') -> s j = s' (transport Fin p j))
+                                                     (s' (transport Fin p i') = y)
+      | y, bvArray xs, bvArray xs' => setArray {i' : Fin _} (i = {Nat} i') (p : DArray.len {xs} = DArray.len {xs'})
+                                               (\Pi (j : Fin _) -> (j /= i') -> xs j = xs' (transport Fin p j))
+                                               (xs' (transport Fin p i') = y)
+      | y, bvSexp l xs, bvSexp l' xs' => setSexp (l = l') {i' : Fin _} (i = {Nat} i') (p : DArray.len {xs} = DArray.len {xs'})
+                                                 (\Pi (j : Fin _) -> (j /= i') -> xs j = xs' (transport Fin p j))
+                                                 (xs' (transport Fin p i') = y)
+      \where {
+
+        \use \level levelProp {i : Nat} {y : Value} {x x' : BoxedValue} (p q : Set i y x x') : p = q \elim y, x, x', p, q
+          | vInt y, bvString s, bvString s', setString p1 p2 q1 q2, setString p1' p2' q1' q2' => setStringLem p1 p1' p2 p2' q1 q1' q2 q2'
+          | y, bvArray xs, bvArray xs', setArray p1 p2 q1 q2, setArray p1' p2' q1' q2' => setArrayLem p1 p1' p2 p2' q1 q1' q2 q2'
+          | y, bvSexp l xs, bvSexp l' xs', setSexp p p1 p2 q1 q2, setSexp p' p1' p2' q1' q2' => setSexpLem p p' p1 p1' p2 p2' q1 q1' q2 q2'
+          \where {
+
+            \func setStringLem {s s' : String} {i1 i2 : Fin s.len} {i : Nat} {y : Int}
+                               (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (p1' p2' : s.len = s'.len)
+                               (q1 : \Pi (j : Fin s.len) -> (j /= i1) -> s j = s' (transport Fin p1' j))
+                               (q2 : \Pi (j : Fin s.len) -> (j /= i2) -> s j = s' (transport Fin p2' j))
+                               (q1' : s' (transport Fin p1' i1) = y) (q2' : s' (transport Fin p2' i2) = y)
+              : setString p1 p1' q1 q1' = {Set i (vInt y) (bvString s) (bvString s')} setString p2 p2' q2 q2'
+            \elim p1, p2, q1'
+              | idp, idp, idp => setStringLem' p1' p2' q1 q2 q2'
+
+            \func setStringLem' {n n' : Nat} {s : String { | len => n }} {s' : String { | len => n' }} {i : Fin s.len}
+                                (p1' p2' : n = n')
+                                (q1 : \Pi (j : Fin s.len) -> j /= i -> s j = s' (transport Fin p1' j))
+                                (q2 : \Pi (j : Fin s.len) -> j /= i -> s j = s' (transport Fin p2' j))
+                                (q2' : s' (transport Fin p2' i) = s' (transport Fin p1' i))
+              : setString idp p1' q1 idp = setString idp p2' q2 q2' \elim p1'
+              | idp => Jl (\lam p2'' p => \Pi (a : _) (b : _) -> setString idp idp q1 idp = setString idp p2'' a b)
+                  (\lam q3 q4 => pmap2 _ (propPath {_} {q1} {q3}) (propPath {_} {idp} {q4}))
+                  (propPath {_} {idp} {p2'}) q2 q2'
+
+            \func setArrayLem {xs xs' : Array Value} {i1 i2 : Fin xs.len} {i : Nat} {y : Value}
+                              (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (p1' p2' : xs.len = xs'.len)
+                              (q1 : \Pi (j : Fin xs.len) -> (j /= i1) -> xs j = xs' (transport Fin p1' j))
+                              (q2 : \Pi (j : Fin xs.len) -> (j /= i2) -> xs j = xs' (transport Fin p2' j))
+                              (q1' : xs' (transport Fin p1' i1) = y) (q2' : xs' (transport Fin p2' i2) = y)
+              : setArray p1 p1' q1 q1' = {Set i y (bvArray xs) (bvArray xs')} setArray p2 p2' q2 q2'
+            \elim p1, p2, q1'
+              | idp, idp, idp => setArrayLem' p1' p2' q1 q2 q2'
+
+            \func setArrayLem' {n n' : Nat} {xs : Array Value { | len => n }} {xs' : Array Value { | len => n' }}
+                               {i : Fin xs.len} (p1' p2' : n = n')
+                               (q1 : \Pi (j : Fin xs.len) -> j /= i -> xs j = xs' (transport Fin p1' j))
+                               (q2 : \Pi (j : Fin xs.len) -> j /= i -> xs j = xs' (transport Fin p2' j))
+                               (q2' : xs' (transport Fin p2' i) = xs' (transport Fin p1' i))
+              : setArray idp p1' q1 idp = setArray idp p2' q2 q2' \elim p1'
+              | idp => Jl (\lam p2'' p => \Pi (a : _) (b : _) -> setArray idp idp q1 idp = setArray idp p2'' a b)
+                  (\lam q3 q4 => pmap2 _ (propPath {_} {q1} {q3}) (propPath {_} {idp} {q4}))
+                  (propPath {_} {idp} {p2'}) q2 q2'
+
+            \func setSexpLem {xs xs' : Array Value} {i1 i2 : Fin xs.len} {i : Nat} {y : Value} {l l' : Label}
+                             (p p' : l = l') (p1 : i = {Nat} i1) (p2 : i = {Nat} i2) (p1' p2' : xs.len = xs'.len)
+                             (q1 : \Pi (j : Fin xs.len) -> (j /= i1) -> xs j = xs' (transport Fin p1' j))
+                             (q2 : \Pi (j : Fin xs.len) -> (j /= i2) -> xs j = xs' (transport Fin p2' j))
+                             (q1' : xs' (transport Fin p1' i1) = y) (q2' : xs' (transport Fin p2' i2) = y)
+              : setSexp p p1 p1' q1 q1' = {Set i y (bvSexp l xs) (bvSexp l' xs')} setSexp p' p2 p2' q2 q2'
+            \elim p, p1, p2, q1'
+              | idp, idp, idp, idp => setSexpLem' p' p1' p2' q1 q2 q2'
+
+            \func setSexpLem' {n n' : Nat} {xs : Array Value { | len => n }} {xs' : Array Value { | len => n' }}
+                              {l : Label} (p' : l = l) {i : Fin xs.len} (p1' p2' : n = n')
+                              (q1 : \Pi (j : Fin xs.len) -> j /= i -> xs j = xs' (transport Fin p1' j))
+                              (q2 : \Pi (j : Fin xs.len) -> j /= i -> xs j = xs' (transport Fin p2' j))
+                              (q2' : xs' (transport Fin p2' i) = xs' (transport Fin p1' i))
+              : setSexp idp idp p1' q1 idp = setSexp p' idp p2' q2 q2' \elim p1'
+              | idp => Jl (\lam p2'' p => \Pi (a : _) (b : _) (c : _) -> setSexp idp idp idp q1 idp = setSexp c idp p2'' a b)
+                  (\lam q3 q4 q5 => path $ \lam i => setSexp (propPath @ i) idp idp (propPath @ i) (propPath @ i))
+                  (propPath {_} {idp} {p2'}) q2 q2' p'
+          }
+      }
+  }
+
+\func Memory => Telescope (NatSemiring : DecSet Loc) BoxedValue
+  \where {
+
+    \func Memory' => Telescope.Telescope' (NatSemiring : DecSet Loc) BoxedValue
+  }

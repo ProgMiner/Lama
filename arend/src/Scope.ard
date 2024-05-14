@@ -1,0 +1,30 @@
+\import Arith.Nat
+\import Function.Meta
+\import Expr
+\import Telescope
+\import Relation.Equivalence
+\import Set (DecSet)
+
+\data Value
+  | \coerce vInt Int
+  | vLoc Loc
+
+\data Ref
+  | rVar Var
+  | rElem Loc Nat
+
+\func Scope => Telescope (NatSemiring : DecSet Var) Value
+  \where {
+
+    \open Telescope
+
+    \func Scope' => Telescope' (NatSemiring : DecSet Var) Value
+
+    \func init (vs : Array Var) (sc : Scope) : Scope \elim vs
+      | nil => sc
+      | v :: vs => set v (vInt 0) $ init vs sc
+
+    \func args {n : Nat} (vs : Array Var n) (xs : Array Value n) : Scope \elim n, vs, xs
+      | 0, nil, nil => in~ nil
+      | suc n, v :: vs, x :: xs => set v x $ args vs xs
+  }
