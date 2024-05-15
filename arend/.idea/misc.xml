@@ -11,15 +11,12 @@
     </option>
     <option name="errorPrintingOptions">
       <ArendPrintingOptions>
-        <option name="showCoerceDefinitions" value="true" />
-        <option name="showConstructorParameters" value="true" />
-        <option name="showImplicitArgs" value="true" />
-        <option name="showTypesInLambda" value="true" />
+        <option name="showLocalFieldInstance" value="false" />
       </ArendPrintingOptions>
     </option>
     <option name="librariesRoot" value="$USER_HOME$/.arend/libs" />
   </component>
-  <component name="ProjectRootManager" version="2" languageLevel="JDK_17" default="true" project-jdk-name="17 (3)" project-jdk-type="JavaSDK">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_17" default="true" project-jdk-name="17" project-jdk-type="JavaSDK">
     <output url="file://$PROJECT_DIR$/out" />
   </component>
 </project>

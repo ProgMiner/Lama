@@ -103,7 +103,7 @@
           : Get' (sc1 ++ sc2) k v \elim sc1
           | nil => p
           | (k', v') :: sc1 =>
-            \let q : k /= k' => \lam q => n v' $ getHead q idp
+            \have q : k /= k' => \lam q => n v' $ getHead q idp
             \in getTail q $ fromSuffix p (\lam x1 g => n x1 (getTail q g))
 
         \func ofConcat {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} {k : K} {v : V} (p : Get' (sc1 ++ sc2) k v)
@@ -132,6 +132,12 @@
     \func Get {K : DecSet} {V : \Set} (sc : Telescope K V) (k : K) (v : V) : \Prop \elim sc
       | in~ sc => Get' sc k v
       | ~-equiv sc1 sc2 r => propExt (r k v).1 (r k v).2
+      \where {
+
+        \func functionality {K : DecSet} {V : \Set} {sc : Telescope K V} {k : K} {v v' : V}
+                            (p : Get sc k v) (p' : Get sc k v') : v = v' \elim sc, p, p'
+          | in~ sc, p, p' => Get'.functionality p p'
+      }
 
     \func set {K : DecSet} {V : \Set} (k : K) (v : V) (sc : Telescope K V) : Telescope K V \elim sc
       | in~ sc => in~ $ (k, v) :: sc
@@ -201,9 +207,9 @@
                 decideEq v0 k' \as dec,
                 p : Get' (if (not $ decToBool dec) ((k', v') :: unset' v0 sc) (unset' v0 sc)) k v
               \with {
-                | yes e, p => \let (p', n) => unset'-lem-=> v0 sc p \in (getTail (\lam q => n $ q *> inv e) p', n)
+                | yes e, p => \have (p', n) => unset'-lem-=> v0 sc p \in (getTail (\lam q => n $ q *> inv e) p', n)
                 | no n, getHead p1 p2 => (getHead p1 p2, \lam q => n $ inv q *> p1)
-                | no n, getTail n' p => \let (p', n'') => unset'-lem-=> v0 sc p \in (getTail n' p', n'')
+                | no n, getTail n' p => \have (p', n'') => unset'-lem-=> v0 sc p \in (getTail n' p', n'')
               }
 
             \func unset'-lem-<= {K : DecSet} {V : \Set} (k0 : K) (sc : Telescope' K V)
@@ -220,7 +226,7 @@
 
         \func unset-=> {K : DecSet} {V : \Set} {sc1 sc2 : Telescope' K V} (k k0 : K) (v : V)
                        (r : R sc1 sc2) (p : Get' (unset' k0 sc1) k v)
-          : Get' (unset' k0 sc2) k v => \let (p', q) => unset'-lem.1 p \in unset'-lem.2 ((r k v).1 p', q)
+          : Get' (unset' k0 sc2) k v => \have (p', q) => unset'-lem.1 p \in unset'-lem.2 ((r k v).1 p', q)
       }
 
     \func erase {K : DecSet} {V : \Set} (ks : Array K) (sc : Telescope K V) : Telescope K V \elim ks

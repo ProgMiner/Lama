@@ -2,13 +2,16 @@
 \import Data.Array
 \import Function
 \import Expr
+\import Function.Meta
 \import Memory
+\import Paths.Meta
 \import Scope
 \import Telescope
 \import Logic
 \import Logic.Meta
 \import Paths
 \import Relation.Equivalence
+\import Utils
 
 \func State => \Sigma Scope Memory
 
@@ -84,17 +87,171 @@
     \use \level levelProp {m : Memory} {x : Value} {pat : Pattern} {sc : Scope.Scope'} (p q : Match m x pat sc)
       : p = q \elim x, pat, sc, p, q
       | _, pWildcard, nil, mWildcard, mWildcard => idp
-      | x, pNamed v pat, sc, mNamed {sc1} p1 p2, mNamed {sc2} q1 q2 => {?}
-      | vLoc l, pArray ps, sc, mArray g d p1, mArray g1 d1 p2 => {?}
-      | vLoc l, pSexp lb ps, sc1, mSexp g d p1, mSexp g1 d1 p2 => {?}
+      | x, pNamed v pat, sc, mNamed {sc1} p1 p2, mNamed {sc2} q1 q2 =>
+        \have p : sc1 = sc2 => ++-inj-left $ inv p2 *> q2
+        \in Jl (\lam sc' q => \Pi (a : _) (b : _) -> mNamed p1 p2 = mNamed {_} {_} {_} {_} {_} {sc'} a b)
+            (\lam a b => pmap2 mNamed (levelProp p1 a) (propPath {sc = sc1 ++ (v, x) :: nil})) p q1 q2
+
+      | vLoc l, pArray {n} ps, sc, mArray {xs1} {scs1} g1 d1 p1, mArray {xs2} {scs2} g2 d2 p2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return Array Value \with { | bvArray xs => xs | _ => nil }
+              | p'' : xs1 = {Array Value n} xs2 => =-n xs1 xs2 p'
+              | q (j : Fin n) : scs1 j = scs2 j =>
+                \have | d1j : Match m (xs1 j) (ps j) (scs1 j) => d1 j
+                      | d1j' : Match m (xs2 j) (ps j) (scs1 j) =>
+                        transport (\lam (xs : Array Value n) => Match m (xs j) (ps j) (scs1 j)) p'' d1j
+                \in functionality d1j' (d2 j)
+              | q' : scs1 = {Array Scope.Scope' n} scs2 => exts q
+              | z => Jl (\lam (xs : Array Value n) p3
+              => \Pi (a : _) (b : _) (c : DArray (\lam i => Match m (xs i) (ps i) (scs1 i)))
+                  -> mArray g1 d1 p1 = {Match m (vLoc l) (pArray {n} ps) sc} mArray {_} {_} {n} {_} {_} {xs} {scs1} a c b)
+                  (\lam a b c =>
+                      \have | d1=c (j : Fin n) : d1 j = {Match m (xs1 j) (ps j) (scs1 j)} c j => levelProp _ _
+                            | d1=c' : d1 = {DArray {n} (\lam i => Match m (xs1 i) (ps i) (scs1 i))} c => exts d1=c
+                      \in path $ \lam i => mArray (propPath i) (d1=c' i)
+                          (propPath { sc = {Scope.Scope'} fold (\lam sc acc => acc ++ sc) nil scs1} i))
+                  p'' g2
+        \in Jl (\lam (scs : Array Scope.Scope' n) p3
+        => \Pi (b : _) (c : DArray (\lam i => Match m (xs2 i) (ps i) (scs i)))
+        -> mArray g1 d1 p1 = mArray {_} {_} {n} {_} {_} {xs2} {scs} g2 c b) z q' p2 d2
+
+      | vLoc l, pSexp lb {n} ps, sc, mSexp {xs1} {scs1} g1 d1 p1, mSexp {xs2} {scs2} g2 d2 p2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return Array Value \with { | bvSexp _ xs => xs | _ => nil }
+              | p'' : xs1 = {Array Value n} xs2 => =-n xs1 xs2 p'
+              | q (j : Fin n) : scs1 j = scs2 j =>
+                \have | d1j : Match m (xs1 j) (ps j) (scs1 j) => d1 j
+                      | d1j' : Match m (xs2 j) (ps j) (scs1 j) =>
+                        transport (\lam (xs : Array Value n) => Match m (xs j) (ps j) (scs1 j)) p'' d1j
+                \in functionality d1j' (d2 j)
+              | q' : scs1 = {Array Scope.Scope' n} scs2 => exts q
+              | z => Jl (\lam (xs : Array Value n) p3
+              => \Pi (a : _) (b : _) (c : DArray (\lam i => Match m (xs i) (ps i) (scs1 i)))
+                  -> mSexp g1 d1 p1 = {Match m (vLoc l) (pSexp lb {n} ps) sc} mSexp {_} {_} {_} {n} {_} {_} {xs} {scs1} a c b)
+                  (\lam a b c =>
+                      \have | d1=c (j : Fin n) : d1 j = {Match m (xs1 j) (ps j) (scs1 j)} c j => levelProp _ _
+                            | d1=c' : d1 = {DArray {n} (\lam i => Match m (xs1 i) (ps i) (scs1 i))} c => exts d1=c
+                      \in path $ \lam i => mSexp (propPath i) (d1=c' i)
+                          (propPath { sc = {Scope.Scope'} fold (\lam sc acc => acc ++ sc) nil scs1} i))
+                  p'' g2
+        \in Jl (\lam (scs : Array Scope.Scope' n) p3
+        => \Pi (b : _) (c : DArray (\lam i => Match m (xs2 i) (ps i) (scs i)))
+            -> mSexp g1 d1 p1 = mSexp {_} {_} {_} {n} {_} {_} {xs2} {scs} g2 c b) z q' p2 d2
+
       | vInt x, pInt y, nil, mInt p1, mInt p2 => pmap mInt propPath
-      | vLoc l, pString s, nil, mString g, mString g1 => {?}
+      | vLoc l, pString s, nil, mString g, mString g1 => pmap mString propPath
       | vLoc l, pBoxed, nil, mBoxed, mBoxed => idp
       | vInt i, pUnboxed, nil, mUnboxed, mUnboxed => idp
-      | vLoc l, pStringShape, nil, mStringShape {s1} g, mStringShape {s2} g1 => {?}
-      | vLoc l, pArrayShape, nil, mArrayShape g, mArrayShape g1 => {?}
-      | vLoc l, pSexpShape, sc1, p1, q => {?}
-      | vLoc l, pFunShape, sc1, p1, q => {?}
+      | vLoc l, pStringShape, nil, mStringShape {s1} g1, mStringShape {s2} g2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return String \with { | bvString xs => xs | _ => nil }
+        \in Jl (\lam xs q => \Pi (a : _) -> mStringShape g1 = mStringShape {_} {_} {xs} a)
+            (\lam a => pmap mStringShape propPath) p' g2
+
+      | vLoc l, pArrayShape, nil, mArrayShape {xs1} g1, mArrayShape {xs2} g2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return Array Value \with { | bvArray xs => xs | _ => nil }
+        \in Jl (\lam xs q => \Pi (a : _) -> mArrayShape g1 = mArrayShape {_} {_} {xs} a)
+            (\lam a => pmap mArrayShape propPath) p' g2
+
+      | vLoc l, pSexpShape, nil, mSexpShape {lb1} {xs1} g1, mSexpShape {lb2} {xs2} g2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return \Sigma Label (Array Value)
+                             \with { | bvSexp lb xs => (lb, xs) | _ => (0, nil) }
+        \in Jl (\lam (lb, xs) q => \Pi (a : _) -> mSexpShape g1 = mSexpShape {_} {_} {lb} {xs} a)
+            (\lam a => pmap mSexpShape propPath) p' g2
+
+      | vLoc l, pFunShape, nil, mFunShape {e1} {xs1} {cl1} g1, mFunShape {e2} {xs2} {cl2} g2 =>
+        \have | p => Telescope.Get.functionality g1 g2
+              | p' => path $ \case p __ \return \Sigma Expr (Array Var) Scope
+                             \with { | bvFun e xs cl => (e, xs, cl) | _ => (eSkip, nil, in~ nil) }
+        \in Jl (\lam (e, xs, cl) q => \Pi (a : _) -> mFunShape g1 = mFunShape {_} {_} {e} {xs} {cl} a)
+            (\lam a => pmap mFunShape propPath) p' g2
+
+    \lemma functionality {m : Memory} {x : Value} {pat : Pattern} {sc sc' : Scope.Scope'}
+                         (p : Match m x pat sc) (q : Match m x pat sc') : sc = sc' \elim x, pat, sc, p
+      | x, pWildcard, nil, mWildcard =>
+        \case sc' \as sc', q : Match m x pWildcard sc' \return nil = sc' \with {
+          | nil, mWildcard => idp
+        }
+
+      | x, pNamed v pat, sc, mNamed {sc1} p1 p2 =>
+        \case q : Match m x (pNamed v pat) sc' \return sc = sc' \with {
+          | mNamed {sc2} q1 q2 =>
+            \have | p => functionality p1 q1
+                  | q : sc1 ++ (v, x) :: nil = sc2 ++ (v, x) :: nil => path $ \lam i => (p @ i) ++ (v, x) :: nil
+            \in p2 *> q *> inv q2
+        }
+
+      | vLoc l, pArray {n} ps, sc, mArray {xs1} {scs1} g1 d1 p1 =>
+        \case q : Match m (vLoc l) (pArray ps) sc' \return sc = sc' \with {
+          | mArray {xs2} {scs2} g2 d2 p2 =>
+            \have | p => Telescope.Get.functionality g1 g2
+                  | p' => path $ \case p __ \return Array Value \with { | bvArray xs => xs | _ => nil }
+                  | p'' : xs1 = {Array Value n} xs2 => =-n xs1 xs2 p'
+                  | q (j : Fin n) : scs1 j = scs2 j =>
+                    \have | d1j : Match m (xs1 j) (ps j) (scs1 j) => d1 j
+                          | d1j' : Match m (xs2 j) (ps j) (scs1 j) =>
+                            transport (\lam (xs : Array Value n) => Match m (xs j) (ps j) (scs1 j)) p'' d1j
+                    \in functionality d1j' (d2 j)
+                  | q' : scs1 = scs2 => ext (idp, ext q)
+            \in rewriteF q' p1 *> inv p2
+        }
+
+      | vLoc l, pSexp lb {n} ps, sc, mSexp {xs1} {scs1} g1 d1 p1 =>
+        \case q : Match m (vLoc l) (pSexp lb ps) sc' \return sc = sc' \with {
+          | mSexp {xs2} {scs2} g2 d2 p2 =>
+            \have | p => Telescope.Get.functionality g1 g2
+                  | p' => path $ \case p __ \return Array Value \with { | bvSexp _ xs => xs | _ => nil }
+                  | p'' : xs1 = {Array Value n} xs2 => =-n xs1 xs2 p'
+                  | q (j : Fin n) : scs1 j = scs2 j =>
+                    \have | d1j : Match m (xs1 j) (ps j) (scs1 j) => d1 j
+                          | d1j' : Match m (xs2 j) (ps j) (scs1 j) =>
+                            transport (\lam (xs : Array Value n) => Match m (xs j) (ps j) (scs1 j)) p'' d1j
+                    \in functionality d1j' (d2 j)
+                  | q' : scs1 = scs2 => ext (idp, ext q)
+            \in rewriteF q' p1 *> inv p2
+        }
+
+      | vInt x, pInt y, nil, mInt p =>
+        \case sc' \as sc', q : Match m (vInt x) (pInt y) sc' \return nil = sc' \with {
+          | nil, mInt q => idp
+        }
+
+      | vLoc l, pString s, nil, mString g1 =>
+        \case sc' \as sc', q : Match m (vLoc l) (pString s) sc' \return nil = sc' \with {
+          | nil, mString g2 => idp
+        }
+
+      | vLoc l, pBoxed, nil, mBoxed =>
+        \case sc' \as sc', q : Match m (vLoc l) pBoxed sc' \return nil = sc' \with {
+          | nil, mBoxed => idp
+        }
+
+      | vInt n, pUnboxed, nil, mUnboxed =>
+        \case sc' \as sc', q : Match m (vInt n) pUnboxed sc' \return nil = sc' \with {
+          | nil, mUnboxed => idp
+        }
+
+      | vLoc l, pStringShape, nil, mStringShape g1 =>
+        \case sc' \as sc', q : Match m (vLoc l) pStringShape sc' \return nil = sc' \with {
+          | nil, mStringShape g2 => idp
+        }
+
+      | vLoc l, pArrayShape, nil, mArrayShape g1 =>
+        \case sc' \as sc', q : Match m (vLoc l) pArrayShape sc' \return nil = sc' \with {
+          | nil, mArrayShape g2 => idp
+        }
+
+      | vLoc l, pSexpShape, nil, mSexpShape g1 =>
+        \case sc' \as sc', q : Match m (vLoc l) pSexpShape sc' \return nil = sc' \with {
+          | nil, mSexpShape g2 => idp
+        }
+
+      | vLoc l, pFunShape, nil, mFunShape g1 =>
+        \case sc' \as sc', q : Match m (vLoc l) pFunShape sc' \return nil = sc' \with {
+          | nil, mFunShape g2 => idp
+        }
   }
 
 -- (old state, closure) == expr ==> (value, new state)
