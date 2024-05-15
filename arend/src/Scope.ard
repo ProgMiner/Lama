@@ -1,6 +1,11 @@
 \import Arith.Nat
+\import Data.Array
+\import Data.Or
 \import Function.Meta
 \import Expr
+\import Logic
+\import Logic.Meta
+\import Paths
 \import Telescope
 \import Relation.Equivalence
 \import Set (DecSet)
@@ -27,4 +32,46 @@
     \func args {n : Nat} (vs : Array Var n) (xs : Array Value n) : Scope \elim n, vs, xs
       | 0, nil, nil => in~ nil
       | suc n, v :: vs, x :: xs => set v x $ args vs xs
+
+    \func Nested (vs : Array Var) (sc sc' : Scope) : \Prop => \Pi (v : Var) -> \Sigma
+      (TruncP (Index v vs) <-> ∃ (x : Value) (Telescope.Get sc v x))
+      (∃ (x : Value) (Telescope.Get sc v x) -> Not (∃ (x : Value) (Telescope.Get sc' v x)))
+      \where {
+
+        \lemma property {vs : Array Var} {sc1 sc1' sc2 sc2' : Scope}
+                        (p : Telescope.concat sc1 sc1' = Telescope.concat sc2 sc2')
+                        (q1 : Nested vs sc1 sc1') (q2 : Nested vs sc2 sc2')
+          : \Sigma (sc1 = sc2) (sc1' = sc2') \elim sc1, sc1', sc2, sc2'
+          | in~ sc1, in~ sc1', in~ sc2, in~ sc2' =>
+            ( path $ ~-equiv _ _ $ \lam k v => (lhs p q1 q2 k v, lhs (inv p) q2 q1 k v)
+            , path $ ~-equiv _ _ $ \lam k v => (rhs p q1 q2 k v, rhs (inv p) q2 q1 k v)
+            )
+          \where {
+
+            \lemma lhs {vs : Array Var} {sc1 sc1' sc2 sc2' : Scope.Scope'}
+                       (p : in~ (sc1 ++ sc1') = {Scope} in~ (sc2 ++ sc2'))
+                       (q1 : Nested vs (in~ sc1) (in~ sc1')) (q2 : Nested vs (in~ sc2) (in~ sc2'))
+                       (v : Var) (x : Value) (g : Telescope.Get' sc1 v x)
+              : Telescope.Get' sc2 v x =>
+              \have g' => transport (\lam sc => Telescope.Get sc v x) p $ Telescope.Get'.fromPrefix sc1' g
+              \in \case Telescope.Get'.ofConcat g' \with {
+                | inl a => a
+                | inr (n, _) =>
+                  \have (inP (x', g1)) => (q2 v).1.1 $ (q1 v).1.2 $ inP (x, g)
+                  \in \case n x' g1
+              }
+
+            \lemma rhs {vs : Array Var} {sc1 sc1' sc2 sc2' : Scope.Scope'}
+                       (p : in~ (sc1 ++ sc1') = {Scope} in~ (sc2 ++ sc2'))
+                       (q1 : Nested vs (in~ sc1) (in~ sc1')) (q2 : Nested vs (in~ sc2) (in~ sc2'))
+                       (v : Var) (x : Value) (g : Telescope.Get' sc1' v x)
+              : Telescope.Get' sc2' v x =>
+              \have g' => transport (\lam sc => Telescope.Get sc v x) p
+                $ Telescope.Get'.fromSuffix g $ \lam x' g' => (q1 v).2 (inP (x', g')) (inP (x, g))
+              \in \case Telescope.Get'.ofConcat g' \with {
+                | inl a => \case (q1 v).2 ((q1 v).1.1 $ (q2 v).1.2 $ inP (x, a)) (inP (x, g))
+                | inr (_, g1) => g1
+              }
+          }
+      }
   }

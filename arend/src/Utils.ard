@@ -1,25 +1,22 @@
 \import Data.Array
-\import Data.Maybe
-\import Function
 \import Function.Meta
 \import Logic
 \import Paths
-\import Paths.Meta
 
-\func ::-inj-left {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : x = y
+\sfunc ::-inj-left {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : x = y
   => path $ \case p __ \with { | nil => x | a :: _ => a }
 
-\func ::-inj-right {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : xs = ys
+\sfunc ::-inj-right {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : xs = ys
   => path $ \case p __ \with { | nil => nil | _ :: l => l }
 
-\func ::-inj {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : \Sigma (x = y) (xs = ys)
+\sfunc ::-inj {A : \Type} {x y : A} {xs ys : Array A} (p : x :: xs = y :: ys) : \Sigma (x = y) (xs = ys)
   => (::-inj-left p, ::-inj-right p)
 
-\func ::-inductive {A : \Type} {x : A} {xs : Array A} (p : x :: xs = xs) : Empty \elim xs
+\lemma ::-inductive {A : \Type} {x : A} {xs : Array A} (p : x :: xs = xs) : Empty \elim xs
   | nil => \case p
   | x' :: xs => ::-inductive $ ::-inj-right {_} {x} {x'} {x' :: xs} p
 
-\func ++-assoc {A : \Type} (xs ys zs : Array A) : xs ++ ys ++ zs = (xs ++ ys) ++ zs \elim xs
+\sfunc ++-assoc {A : \Type} (xs ys zs : Array A) : xs ++ ys ++ zs = (xs ++ ys) ++ zs \elim xs
   | nil => idp
   | x :: xs => pmap (x ::) $ ++-assoc xs ys zs
 
@@ -28,17 +25,17 @@
   | x :: xs => rev xs ++ x :: nil
   \where {
 
-    \func ++-lem {A : \Type} (xs ys : Array A) : rev (xs ++ ys) = rev ys ++ rev xs \elim xs
+    \sfunc ++-lem {A : \Type} (xs ys : Array A) : rev (xs ++ ys) = rev ys ++ rev xs \elim xs
       | nil => inv ++_nil
       | x :: xs => pmap (`++ x :: nil) (++-lem xs ys) *> inv (++-assoc (rev ys) (rev xs) (x :: nil))
 
-    \func involutive {A : \Type} (xs : Array A) : rev (rev xs) = xs \elim xs
+    \sfunc involutive {A : \Type} (xs : Array A) : rev (rev xs) = xs \elim xs
       | nil => idp
       | x :: xs => ++-lem (rev xs) (x :: nil) *> pmap (x ::) (involutive xs)
   }
 
-\func ++-inj-left {A : \Type} {xs xs' : Array A} {ys : Array A}
-                  (p : xs ++ ys = xs' ++ ys) : xs = xs' \elim xs, xs'
+\sfunc ++-inj-left {A : \Type} {xs xs' : Array A} {ys : Array A}
+                   (p : xs ++ ys = xs' ++ ys) : xs = xs' \elim xs, xs'
   | nil, nil => idp {Array A 0}
   | nil, x' :: xs' => \case nil-lem {_} {x' :: xs'} (inv p)
   | x :: xs, nil => \case nil-lem {_} {x :: xs} p
@@ -48,15 +45,15 @@
     \in path $ \lam i => p1 i :: q i
   \where {
 
-    \func nil-lem' {A : \Type} {xs ys : Array A} (p : xs ++ ys = xs) : ys = nil \elim xs
+    \sfunc nil-lem' {A : \Type} {xs ys : Array A} (p : xs ++ ys = xs) : ys = nil \elim xs
       | nil => p
       | x :: xs => nil-lem' $ ::-inj-right p
 
-    \func nil-lem {A : \Type} {xs ys : Array A} (p : xs ++ ys = ys) : xs = nil =>
+    \sfunc nil-lem {A : \Type} {xs ys : Array A} (p : xs ++ ys = ys) : xs = nil =>
       \have | q => inv (rev.++-lem xs ys) *> pmap rev p
             | q' => nil-lem' q
       \in inv (rev.involutive xs) *> pmap rev q'
   }
 
-\func =-n {A : \Type} {n : Nat} (xs ys : Array A n) (p : xs = {Array A} ys) : xs = {Array A n} ys \elim p
+\sfunc =-n {A : \Type} {n : Nat} (xs ys : Array A n) (p : xs = {Array A} ys) : xs = {Array A n} ys \elim p
   | idp => idp {Array A n}
