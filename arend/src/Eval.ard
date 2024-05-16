@@ -1,9 +1,9 @@
 \import Arith.Int
 \import Data.Array
-\import Data.Or
 \import Function
 \import Expr
 \import Function.Meta
+\import HLevel
 \import Memory
 \import Paths.Meta
 \import Scope
@@ -224,17 +224,16 @@
                                                   (Eval st' cl e2 x (sc, m))
                                                   (sc' = Telescope.set v x sc)
   | st, eAssign e1 e2, x, (sc, m') => evAssignMem {l : Loc} {i : Nat} {st' : State} {m : Memory} {bv1 bv2 : BoxedValue}
-                                                  (EvalRef st cl e1 (rElem l i) st')
-                                                  (Eval st' cl e2 x (sc, m))
+                                                  (EvalRef st cl e1 (rElem l i) st') (Eval st' cl e2 x (sc, m))
                                                   (Telescope.Get m l bv1) (BoxedValue.Set i x bv1 bv2)
                                                   (m' = Telescope.set l bv2 m)
-  | st, eBinop b e1 e2, vInt x, st'' => evBinop {st' : State} {v1 v2 : Int}
-                                                (Eval st cl e1 (vInt v1) st') (Eval st' cl e2 (vInt v2) st'')
-                                                (EvalBinop b v1 v2 x)
+  | st, eBinop b e1 e2, vInt z, st'' => evBinop {st' : State} {x y : Int} (EvalBinop b x y z)
+                                                (Eval st cl e1 (vInt x) st') (Eval st' cl e2 (vInt y) st'')
   | st, eCall f {n} xs, x, st'' => evCall {l : Loc} {f' : Expr} {st' : State} {xs' : Array Value n}
                                           {vs : Array Var n} {sc cl' : Scope} {m : Memory}
                                           (Eval st cl f (vLoc l) st') (Eval* st' cl xs xs' (sc, m))
-                                          (Telescope.Get m l (bvFun f' vs cl')) (Eval (Scope.args vs xs', m) cl' f' x st'')
+                                          (Telescope.Get m l (bvFun f' vs cl'))
+                                          (Eval (Scope.args vs xs', m) cl' f' x st'')
   | st, eSubscript e1 e2, x, (sc, m) => evSubscript {l : Loc} {st' : State} {i : Nat} {bv : BoxedValue}
                                                     (Eval st cl e1 (vLoc l) st') (Eval st' cl e2 (vInt i) (sc, m))
                                                     (Telescope.Get m l bv) (BoxedValue.Get i x bv)
@@ -247,10 +246,12 @@
   | (sc, m), eFun vs e, vLoc l, (sc', m') => evFun (sc = sc') (Memory.NextLoc m l)
                                                    (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
   | st, eSkip, vInt 0, st' => evSkip (st = st')
-  | st, eArray {n} xs, vLoc l, (sc, m') => evArray {xs' : Array Value n} {m : Memory} (Memory.NextLoc m l)
-                                                   (Eval* st cl xs xs' (sc, m)) (m' = Telescope.set l (bvArray xs') m)
-  | st, eSexp lb {n} xs, vLoc l, (sc, m') => evSexp {xs' : Array Value n} {m : Memory} (Memory.NextLoc m l)
-                                                    (Eval* st cl xs xs' (sc, m)) (m' = Telescope.set l (bvSexp lb xs') m)
+  | st, eArray {n} xs, vLoc l, (sc, m') => evArray {xs' : Array Value n} {m : Memory}
+                                                   (Eval* st cl xs xs' (sc, m)) (Memory.NextLoc m l)
+                                                   (m' = Telescope.set l (bvArray xs') m)
+  | st, eSexp lb {n} xs, vLoc l, (sc, m') => evSexp {xs' : Array Value n} {m : Memory}
+                                                    (Eval* st cl xs xs' (sc, m)) (Memory.NextLoc m l)
+                                                    (m' = Telescope.set l (bvSexp lb xs') m)
   | st, eIf c t _, x, st'' => evIfTrue {c' : Int} {st' : State} (Eval st cl c (vInt c') st')
                                        (c' /= 0) (Eval st' cl t x st'')
   | st, eIf c _ f, x, st'' => evIfFalse {st' : State} (Eval st cl c (vInt 0) st') (Eval st' cl f x st'')
@@ -258,31 +259,127 @@
                                                 (c' /= 0) (Eval st' cl (eWhile c b) (vInt 0) st'')
   | st, eWhile c _, vInt 0, st' => evWhileFalse (Eval st cl c (vInt 0) st')
   | st, eDo b c, vInt 0, st''' => evDoTrue {x' : Value} {c' : Int} {st' st'' : State} (Eval st cl b x' st')
-                                           (Eval st' cl c (vInt c') st'') (c' /= 0) (Eval st'' cl (eDo b c) (vInt 0) st''')
+                                           (Eval st' cl c (vInt c') st'') (c' /= 0)
+                                           (Eval st'' cl (eDo b c) (vInt 0) st''')
   | st, eDo b c, vInt 0, st'' => evDoFalse {x' : Value} {st' : State} (Eval st cl b x' st')
                                            (Eval st' cl c (vInt 0) st'')
   | st, eCase e {n} pbs, x, st'' => evCase {x' : Value} {st' : State} (Eval st cl e x' st')
                                            (EvalCase st' cl x' pbs x st'')
   \where {
 
-    \use \level levelProp {st : State} {cl : Scope} {e : Expr} {v : Value} {st' : State} (p q : Eval st cl e v st')
+    \use \level levelProp {st : State} {cl : Scope} {e : Expr} {v : Value} {st' : State} : isProp (Eval st cl e v st')
+      => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {e : Expr} {v : Value} {st' : State} (p q : Eval st cl e v st')
       : p = q \elim st, e, v, st', p, q
-      | (sc, m), eScope ds e1, x, (sc', m'), evScope e2 p p1, evScope _ _ _ => {?}
+      | (sc, m), eScope ds e, x, (sc', m'), evScope {st1} {sc1'} ev1 p1 q1, evScope {st2} {sc2'} ev2 p2 q2 =>
+        \have | st1=st2 : st1 = st2 => EvalDef*.functionality ev1 ev2
+              | (_, p) => Eval.functionality (rewriteF st1=st2 p1) p2
+              | p' => path $ \lam i => (p i).1
+              | (sc1'=sc2' : sc1' = sc2', _) => Scope.Nested.property {Def.var o ds} p' q1 q2
+              | q => path $ \lam i => (st1=st2 i, sc1'=sc2' i)
+        \in transport (\lam (st, sc1) => \Pi (a : _) (b : _) (c : _) -> evScope ev1 p1 q1
+          = evScope {_} {_} {_} {_} {_} {_} {_} {_} {_} {st} {sc1} a b c)
+            q (\lam a b c => path $ \lam i => evScope (EvalDef*.levelProp' ev1 a i) (levelProp' p1 b i) (propPath i))
+            ev2 p2 q2
+
       | st, eSeq e1 e2, x, st'', evSeq {st1} {v1} p1 q1, evSeq {st2} {v2} p2 q2 =>
         \have p : (v1, st1) = (v2, st2) => ext $ functionality p1 p2
-        \in transport (\lam (x', st') => \Pi (a : _) (b : _) -> evSeq p1 q1 = evSeq {_} {_} {_} {_} {_} {_} {st'} {x'} a b)
-            p (\lam a b => pmap2 evSeq (levelProp p1 a) (levelProp q1 b)) p2 q2
+        \in transport (\lam (x', st') => \Pi (a : _) (b : _) -> evSeq p1 q1
+          = evSeq {_} {_} {_} {_} {_} {_} {st'} {x'} a b)
+            p (\lam a b => pmap2 evSeq (levelProp' p1 a) (levelProp' q1 b)) p2 q2
 
-      | st, eAssign e1 e2, x, (sc', m), evAssignVar e3 p p1, evAssignVar _ _ _ => {?}
-      | st, eAssign e1 e2, v1, (sc', m), evAssignVar e3 p p1, evAssignMem e4 q g s p2 => {?}
-      | st, eAssign e1 e2, v1, (sc', m), evAssignMem e3 p g s p1, evAssignVar e4 q p2 => {?}
-      | st, eAssign e1 e2, x, (sc, m'), evAssignMem e3 p g s p1, evAssignMem _ _ _ _ _ => {?}
-      | st, eBinop b e1 e2, vInt x, st', evBinop p1 p2 e3, evBinop _ _ _ => {?}
-      | st, eCall e1 xs, x, st', evCall p1 e2 g p2, evCall _ _ _ _ => {?}
-      | st, eSubscript e1 e2, x, (sc, m), evSubscript p1 p2 g g1, evSubscript _ _ _ _ => {?}
+      | st, eAssign e1 e2, x, (sc', m), evAssignVar {v1} {st1} {sc1} ev1 p1 q1,
+      evAssignVar {v2} {st2} {sc2} ev2 p2 q2 =>
+        \have | (v1=v2', st1=st2) => EvalRef.functionality ev1 ev2
+              | v1=v2 => path $ \case v1=v2' __ \with { | rVar v => v | _ => 0 }
+              | p1' => transport _ st1=st2 p1
+              | (_, p) => functionality p1' p2
+              | sc1=sc2 => path $ \lam i => (p i).1
+              | q => path $ \lam i => (v1=v2 i, st1=st2 i, sc1=sc2 i)
+        \in transport (\lam (v, st', sc) => \Pi (a : _) (b : _) (c : _) -> evAssignVar ev1 p1 q1
+          = evAssignVar {_} {_} {_} {_} {_} {_} {_} {v} {st'} {sc} a b c)
+            q (\lam a b c => path $ \lam i => evAssignVar (EvalRef.levelProp' ev1 a i) (levelProp' p1 b i) (propPath i))
+            ev2 p2 q2
+
+      | st, eAssign e1 e2, x, (sc', m), evAssignVar {v} p1 _ _, evAssignMem {l} {i} p2 _ _ _ _ =>
+        \have (v=li, _) => EvalRef.functionality p1 p2 \in \case v=li
+
+      | st, eAssign e1 e2, x, (sc', m), evAssignMem {l} {i} p1 _ _ _ _, evAssignVar {v} p2 _ _ =>
+          \have (v=li, _) => EvalRef.functionality p1 p2 \in \case v=li
+
+      | st, eAssign e1 e2, x, (sc, m'), evAssignMem {l1} {i1} {st1} {m1} {bv11} {bv12} er1 ev1 g1 s1 p1,
+      evAssignMem {l2} {i2} {st2} {m2} {bv21} {bv22} er2 ev2 g2 s2 p2 =>
+        \have | (l1i1=l2i2, st1=st2) => EvalRef.functionality er1 er2
+              | l1=l2 => path $ \case l1i1=l2i2 __ \with { | rElem l _ => l | _ => 0 }
+              | i1=i2 => path $ \case l1i1=l2i2 __ \with { | rElem _ i => i | _ => 0 }
+              | ev1' => transport _ st1=st2 ev1
+              | (_, m1=m2') => functionality ev1' ev2
+              | m1=m2 => path $ \lam i => (m1=m2' i).2
+              | p => path $ \lam i => (l1=l2 i, m1=m2 i)
+              | g1' => transport (\lam (l, m) => Telescope.Get m l bv11) p g1
+              | bv11=bv21 => Telescope.Get.functionality g1' g2
+              | p' => path $ \lam i => (i1=i2 i, bv11=bv21 i)
+              | s1' => transport (\lam (i, bv1) => BoxedValue.Set i x bv1 bv12) p' s1
+              | bv12=bv22 => BoxedValue.Set.functionality s1' s2
+              | q => path $ \lam i => (l1=l2 i, i1=i2 i, st1=st2 i, m1=m2 i, bv11=bv21 i, bv12=bv22 i)
+        \in transport (\lam (l, i, st', m, bv1, bv2) => \Pi (a : _) (b : _) (c : _) (d : _) (e : _)
+        -> evAssignMem er1 ev1 g1 s1 p1
+              = evAssignMem {_} {_} {_} {_} {_} {_} {_} {l} {i} {st'} {m} {bv1} {bv2} a b c d e)
+            q (\lam a b c d e => path $ \lam i => evAssignMem (EvalRef.levelProp' er1 a i) (levelProp' ev1 b i)
+                (propPath i) (propPath i) (propPath i)) er2 ev2 g2 s2 p2
+
+      | st, eBinop b e1 e2, vInt z, st'', evBinop {st1} {x1} {y1} b1 p1 q1, evBinop {st2} {x2} {y2} b2 p2 q2 =>
+        \have | (x1=x2', st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (y1=y2', _) => functionality q1' q2
+              | x1=x2 => path $ \case x1=x2' __ \with { | vInt n => n | _ => 0 }
+              | y1=y2 => path $ \case y1=y2' __ \with { | vInt n => n | _ => 0 }
+              | p => path $ \lam i => (st1=st2 i, x1=x2 i, y1=y2 i)
+        \in transport (\lam (st', x, y) => \Pi (a : _) (b : _) (c : _) -> evBinop b1 p1 q1
+          = evBinop {_} {_} {_} {_} {_} {_} {_} {st'} {x} {y} a b c)
+            p (\lam a b c => path $ \lam i => evBinop (propPath i) (levelProp' p1 b i) (levelProp' q1 c i)) b2 p2 q2
+
+      | st, eCall f {n} xs, x, st'', evCall {l1} {f1} {st1} {xs1} {vs1} {sc1} {cl1} {m1} p1 q1 g1 ev1
+      , evCall {l2} {f2} {st2} {xs2} {vs2} {sc2} {cl2} {m2} p2 q2 g2 ev2 =>
+        \have | (l1=l2', st1=st2) => functionality p1 p2
+              | l1=l2 => path $ \case l1=l2' __ \with { | vLoc l => l | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (xs1=xs2, sc1m1=sc2m2) => Eval*.functionality q1' q2
+              | sc1=sc2 => path $ \lam i => (sc1m1=sc2m2 i).1
+              | m1=m2 => path $ \lam i => (sc1m1=sc2m2 i).2
+              | p => path $ \lam i => (l1=l2 i, m1=m2 i)
+              | g1' => transport (\lam (l, m) => Telescope.Get m l _) p g1
+              | f1vs1cl1=f2vs2cl2 => Telescope.Get.functionality g1' g2
+              | f1=f2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun f _ _ => f | _ => eSkip }
+              | vs1=vs2' : vs1 = {Array Var} vs2 => path
+                $ \case f1vs1cl1=f2vs2cl2 __  \with { | bvFun _ vs _ => vs | _ => nil }
+              | vs1=vs2 : vs1 = {Array Var n} vs2 => =-n vs1 vs2 vs1=vs2'
+              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => in~ nil }
+              | q => path $ \lam i => (l1=l2 i, f1=f2 i, st1=st2 i, xs1=xs2 i, vs1=vs2 i, sc1=sc2 i, cl1=cl2 i, m1=m2 i)
+        \in transport (\lam (l, f', st', xs', vs, sc, cl', m) => \Pi (a : _) (b : _) (c : _) (d : _)
+        -> evCall p1 q1 g1 ev1 = evCall {_} {_} {_} {_} {_} {_} {_} {l} {f'} {st'} {xs'} {vs} {sc} {cl'} {m} a b c d)
+            q (\lam a b c d => path $ \lam i => evCall (levelProp' p1 a i) (Eval*.levelProp' q1 b i)
+                (propPath i) (levelProp' ev1 d i)) p2 q2 g2 ev2
+
+      | st, eSubscript e1 e2, x, (sc, m), evSubscript {l1} {st1} {i1} {bv1} p1 q1 g1 g1'
+      , evSubscript {l2} {st2} {i2} {bv2} p2 q2 g2 g2' =>
+        \have | (l1=l2', st1=st2) => functionality p1 p2
+              | l1=l2 => path $ \case l1=l2' __ \with { | vLoc l => l | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (i1=i2', _) => functionality q1' q2
+              | i1=i2 => path $ \case i1=i2' __ \with { | vInt (pos n) => n | vInt (neg n) => n | _ => 0 }
+              | g1'' => transport (\lam l => Telescope.Get m l bv1) l1=l2 g1
+              | bv1=bv2 => Telescope.Get.functionality g1'' g2
+              | p => path $ \lam i => (l1=l2 i, st1=st2 i, i1=i2 i, bv1=bv2 i)
+        \in transport (\lam (l, st', i, bv) => \Pi (a : _) (b : _) (c : _) (d : _) -> evSubscript p1 q1 g1 g1'
+          = evSubscript {_} {_} {_} {_} {_} {_} {_} {l} {st'} {i} {bv} a b c d)
+            p (\lam a b c d => path $ \lam i => evSubscript (levelProp' p1 a i) (levelProp' q1 b i)
+                (propPath i) (propPath i)) p2 q2 g2 g2'
+
       | (sc, m), eVar v, x, st', evVarScope p1 g1, evVarScope p2 g2 => pmap2 evVarScope propPath propPath
-      | (sc, m), eVar v, x, st', evVarScope p1 g1, evVarClosure _ n _ => \case n x g1
-      | (sc, m), eVar v, x, st', evVarClosure p1 n1 g1, evVarScope _ g2 => \case n1 x g2
+      | (sc, m), eVar v, x, st', evVarScope _ p, evVarClosure _ n _ => \case n x p
+      | (sc, m), eVar v, x, st', evVarClosure _ n _, evVarScope _ p => \case n x p
       | (sc, m), eVar v, x, st', evVarClosure p1 n1 g1, evVarClosure p2 n2 g2
       => path $ \lam i => evVarClosure (propPath i) (propPath i) (propPath i)
 
@@ -294,37 +391,287 @@
       => path $ \lam i => evFun (propPath i) (propPath i) (propPath i)
 
       | st, eSkip, vInt 0, st', evSkip p1, evSkip p2 => pmap evSkip propPath
-      | st, eArray {n} xs, vLoc l, (sc, m'), evArray {xs1} {m1} p1 q1 n1, evArray {xs2} {m2} p2 q2 n2 => {?}
-      | st, eSexp lb {n} xs, vLoc l, (sc, m'), evSexp e p _x, evSexp _ _ _ => {?}
-      | st, eIf c t f, x, st', evIfTrue p1 _x p2, evIfTrue _ _ _ => {?}
-      | st, eIf e1 e2 e3, v1, st', evIfTrue {c'} p1 n q1, evIfFalse p2 q2 =>
-        \have | (p, _) => functionality p1 p2
-        \in \case n $ \case p __ \with { | vInt x => x | _ => 0 }
+      | st, eArray {n} xs, vLoc l, (sc, m'), evArray {xs1} {m1} p1 q1 n1, evArray {xs2} {m2} p2 q2 n2 =>
+        \have | (xs1=xs2, m1=m2') => Eval*.functionality p1 p2
+              | m1=m2 => path $ \lam i => (m1=m2' i).2
+              | p => path $ \lam i => (xs1=xs2 i, m1=m2 i)
+        \in transport (\lam (xs', m) => \Pi (a : _) (b : _) (c : _) -> evArray p1 q1 n1
+          = evArray {_} {_} {_} {_} {_} {_} {_} {xs'} {m} a b c)
+            p (\lam a b c => path $ \lam i => evArray (Eval*.levelProp' p1 a i) (propPath i) (propPath i)) p2 q2 n2
 
-      | st, eIf e1 e2 e3, v1, st', evIfFalse p1 q1, evIfTrue p2 n q2 =>
-        \have | (p, _) => functionality p1 p2
-        \in \case n $ inv $ \case p __ \with { | vInt x => x | _ => 0 }
+      | st, eSexp lb {n} xs, vLoc l, (sc, m'), evSexp {xs1} {m1} p1 q1 n1, evSexp {xs2} {m2} p2 q2 n2 =>
+        \have | (xs1=xs2, m1=m2') => Eval*.functionality p1 p2
+              | m1=m2 => path $ \lam i => (m1=m2' i).2
+              | p => path $ \lam i => (xs1=xs2 i, m1=m2 i)
+        \in transport (\lam (xs', m) => \Pi (a : _) (b : _) (c : _) -> evSexp p1 q1 n1
+          = evSexp {_} {_} {_} {_} {_} {_} {_} {_} {xs'} {m} a b c)
+            p (\lam a b c => path $ \lam i => evSexp (Eval*.levelProp' p1 a i) (propPath i) (propPath i)) p2 q2 n2
 
-      | st, eIf c t f, x, st', evIfFalse p1 q1, evIfFalse p2 q2 => {?}
-      | st, eWhile c b, vInt 0, st'', evWhileTrue p1 _x p2, evWhileTrue _ _ _ => {?}
+      | st, eIf c t _, x, st'', evIfTrue {c1} {st1} p1 n1 q1, evIfTrue {c2} {st2} p2 n2 q2 =>
+        \have | (c1=c2', st1=st2) => functionality p1 p2
+              | c1=c2 => path $ \case c1=c2' __ \with { | vInt n => n | _ => 0 }
+              | p => path $ \lam i => (c1=c2 i, st1=st2 i)
+        \in transport (\lam (c', st') => \Pi (a : _) (b : _) (c : _) -> evIfTrue p1 n1 q1
+          = evIfTrue {_} {_} {_} {_} {_} {_} {_} {c'} {st'} a b c)
+            p (\lam a b c => path $ \lam i => evIfTrue (levelProp' p1 a i) (propPath i) (levelProp' q1 c i)) p2 n2 q2
+
+      | st, eIf c t f, v1, st'', evIfTrue p1 n q1, evIfFalse p2 q2 =>
+        \have (p, _) => functionality p1 p2 \in \case n $ \case p __ \with { | vInt x => x | _ => 0 }
+
+      | st, eIf c t f, v1, st'', evIfFalse p1 q1, evIfTrue p2 n q2 =>
+        \have (p, _) => functionality p1 p2 \in \case n $ inv $ \case p __ \with { | vInt x => x | _ => 0 }
+
+      | st, eIf c _ f, x, st'', evIfFalse {st1} p1 q1, evIfFalse {st2} p2 q2 =>
+        \have (_, st1=st2) => functionality p1 p2
+        \in transport (\lam st' => \Pi (a : _) (b : _) -> evIfFalse p1 q1
+          = evIfFalse {_} {_} {_} {_} {_} {_} {_} {st'} a b)
+            st1=st2 (\lam a b => pmap2 evIfFalse (levelProp' p1 a) (levelProp' q1 b)) p2 q2
+
+      | st, eWhile c b, vInt 0, st'', evWhileTrue {c1} {st1} p1 n1 q1, evWhileTrue {c2} {st2} p2 n2 q2 =>
+        \have | (c1=c2', st1=st2) => functionality p1 p2
+              | c1=c2 => path $ \case c1=c2' __ \with { | vInt n => n | _ => 0 }
+              | p => path $ \lam i => (c1=c2 i, st1=st2 i)
+        \in transport (\lam (c', st') => \Pi (a : _) (b : _) (c : _) -> evWhileTrue p1 n1 q1
+          = evWhileTrue {_} {_} {_} {_} {_} {c'} {st'} a b c)
+            p (\lam a b c => path $ \lam i => evWhileTrue (levelProp' p1 a i) (propPath i) (levelProp' q1 c i))
+            p2 n2 q2
+
       | st, eWhile e1 e2, vInt 0, st', evWhileTrue p1 n _, evWhileFalse p2 =>
-        \have | (p, _) => functionality p1 p2
-        \in \case n $ \case p __ \with { | vInt x => x | _ => 0 }
+        \have (p, _) => functionality p1 p2 \in \case n $ \case p __ \with { | vInt x => x | _ => 0 }
 
       | st, eWhile e1 e2, vInt 0, st', evWhileFalse p1, evWhileTrue p2 n _ =>
-        \have | (p, _) => functionality p1 p2
-        \in \case n $ inv $ \case p __ \with { | vInt x => x | _ => 0 }
+        \have (p, _) => functionality p1 p2 \in \case n $ inv $ \case p __ \with { | vInt x => x | _ => 0 }
 
-      | st, eWhile c b, vInt 0, st', evWhileFalse p1, evWhileFalse p2 => pmap evWhileFalse $ levelProp p1 p2
-      | st, eDo b c, vInt 0, st''', evDoTrue p1 p2 _x p3, evDoTrue _ _ _ _ => {?}
-      | st, eDo e1 e2, vInt 0, st'1, evDoTrue p p1 _x p2, evDoFalse q1 q2 => {?}
-      | st, eDo e1 e2, vInt 0, st'1, evDoFalse p p1, evDoTrue q1 q2 _x q3 => {?}
-      | st, eDo b c, vInt 0, st'', evDoFalse p1 p2, evDoFalse _ _ => {?}
-      | st, eCase e {n} pbs, x, st', evCase p e1, evCase _ _ => {?}
+      | st, eWhile c b, vInt 0, st', evWhileFalse p1, evWhileFalse p2 => pmap evWhileFalse $ levelProp' p1 p2
+      | st, eDo b c, vInt 0, st''', evDoTrue {x1} {c1} {st1'} {st1''} p1 q1 n1 ev1,
+      evDoTrue {x2} {c2} {st2'} {st2''} p2 q2 n2 ev2 =>
+        \have | (x1=x2, st1'=st2') => functionality p1 p2
+              | q1' => transport _ st1'=st2' q1
+              | (c1=c2', st1''=st2'') => functionality q1' q2
+              | c1=c2 => path $ \case c1=c2' __ \with { | vInt n => n | _ => 0 }
+              | p => path $ \lam i => (x1=x2 i, c1=c2 i, st1'=st2' i, st1''=st2'' i)
+        \in transport (\lam (x', c', st', st'') => \Pi (a : _) (b : _) (c : _) (d : _) -> evDoTrue p1 q1 n1 ev1
+          = evDoTrue {_} {_} {_} {_} {_} {x'} {c'} {st'} {st''} a b c d)
+            p (\lam a b c d => path $ \lam i => evDoTrue (levelProp' p1 a i) (levelProp' q1 b i)
+                (propPath i) (levelProp' ev1 d i)) p2 q2 n2 ev2
 
-    \lemma functionality {st : State} {cl : Scope} {e : Expr} {v1 v2 : Value} {st1 st2 : State}
-                         (p : Eval st cl e v1 st1) (q : Eval st cl e v2 st2) : \Sigma (v1 = v2) (st1 = st2)
-      => {?}
+      | st, eDo b c, vInt 0, st'', evDoTrue {x1} {c'} {st1} p1 q1 n _, evDoFalse {x2} {st2} p2 q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (c'=0', _) => functionality q1' q2
+              | c'=0 => path $ \case c'=0' __ \with { | vInt n => n | _ => 0 }
+        \in \case n c'=0
+
+      | st, eDo b c, vInt 0, st'', evDoFalse {x1} {st1} p1 q1, evDoTrue {x2} {c'} {st2} p2 q2 n _ =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (c'=0', _) => functionality q1' q2
+              | c'=0 => path $ \case c'=0' __ \with { | vInt n => n | _ => 0 }
+        \in \case n $ inv c'=0
+
+      | st, eDo b c, vInt 0, st'', evDoFalse {x1} {st1} p1 q1, evDoFalse {x2} {st2} p2 q2 =>
+        \have | (x1=x2, st1=st2) => functionality p1 p2
+              | p => path $ \lam i => (x1=x2 i, st1=st2 i)
+        \in transport (\lam (x, st') => \Pi (a : _) (b : _) -> evDoFalse p1 q1
+          = evDoFalse {_} {_} {_} {_} {_} {x} {st'} a b)
+            p (\lam a b => pmap2 evDoFalse (levelProp' p1 a) (levelProp' q1 b)) p2 q2
+
+      | st, eCase e {n} pbs, x, st'', evCase {x1} {st1} p1 q1, evCase {x2} {st2} p2 q2 =>
+        \have | (x1=x2, st1=st2) => functionality p1 p2
+              | p => path $ \lam i => (x1=x2 i, st1=st2 i)
+        \in transport (\lam (x', st') => \Pi (a : _) (b : _) -> evCase p1 q1
+          = evCase {_} {_} {_} {_} {_} {_} {_} {x'} {st'} a b)
+            p (\lam a b => pmap2 evCase (levelProp' p1 a) (EvalCase.levelProp' q1 b)) p2 q2
+
+    -- TODO: fix problem with termination checker
+    \lemma functionality {st : State} {cl : Scope} {e : Expr} {x1 x2 : Value} {st1 st2 : State}
+                         (p : Eval st cl e x1 st1) (q : Eval st cl e x2 st2)
+      : \Sigma (x1 = x2) (st1 = st2) \elim st, e, x1, x2, st1, st2, p, q
+      | (sc, m), eScope ds e, x1, x2, (sc1, m1), (sc2, m2), evScope {st1} {sc1'} ev1 p1 q1,
+      evScope {st2} {sc2'} ev2 p2 q2 =>
+        \have | st1=st2 => EvalDef*.functionality ev1 ev2
+              | p1' => transport _ st1=st2 p1
+              | (x1=x2, st1'=st2') => functionality p1' p2
+              | (_, sc1=sc2) => Scope.Nested.property {Def.var o ds} (path $ \lam i => (st1'=st2' i).1) q1 q2
+        \in (x1=x2, path $ \lam i => (sc1=sc2 i, (st1'=st2' i).2))
+
+      | st, eSeq e1 e2, x1, x2, st1', st2', evSeq {st1} {x1'} p1 q1, evSeq {st2} {x2'} p2 q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+        \in functionality q1' q2
+
+      | st, eAssign e1 e2, x1, x2, (sc1', m1), (sc2', m2), evAssignVar {v1} {st1} {sc1} p1 q1 idp,
+      evAssignVar {v2} {st2} {sc2} p2 q2 idp =>
+        \have | (v1=v2', st1=st2) => EvalRef.functionality p1 p2
+              | v1=v2 => path $ \case v1=v2' __ \with { | rVar v => v | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (x1=x2, sc1m1=sc2m2) => functionality q1' q2
+        \in (x1=x2, path $ \lam i => (Telescope.set (v1=v2 i) (x1=x2 i) (sc1m1=sc2m2 i).1, (sc1m1=sc2m2 i).2))
+
+      | st, eAssign e1 e2, x1, x2, (sc1, m1), (sc2, m2), evAssignVar {v} p _ _, evAssignMem {l} q _ _ _ _ =>
+        \have (v=l, _) => EvalRef.functionality q p \in \case v=l
+
+      | st, eAssign e1 e2, x1, x2, (sc1, m1), (sc2, m2), evAssignMem {l} p _ _ _ _, evAssignVar {v} q _ _ =>
+        \have (v=l, _) => EvalRef.functionality q p \in \case v=l
+
+      | st, eAssign e1 e2, x1, x2, (sc1, m1'), (sc2, m2'),
+      evAssignMem {l1} {i1} {st1} {m1} {bv11} {bv12} p1 q1 g1 s1 idp,
+      evAssignMem {l2} {i2} {st2} {m2} {bv21} {bv22} p2 q2 g2 s2 idp =>
+        \have | (l1i1=l2i2, st1=st2) => EvalRef.functionality p1 p2
+              | l1=l2 => path $ \case l1i1=l2i2 __ \with { | rElem l _ => l | _ => 0 }
+              | i1=i2 => path $ \case l1i1=l2i2 __ \with { | rElem _ i => i | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (x1=x2, sc1m1=sc2m2) => functionality q1' q2
+              | p => path $ \lam i => ((sc1m1=sc2m2 i).2, l1=l2 i)
+              | g1' => transport (\lam (m, l) => Telescope.Get m l bv11) p g1
+              | bv11=bv21 => Telescope.Get.functionality g1' g2
+              | q => path $ \lam i => (i1=i2 i, x1=x2 i, bv11=bv21 i)
+              | s1' => transport (\lam (i, x, bv1) => BoxedValue.Set i x bv1 bv12) q s1
+              | bv12=bv22 => BoxedValue.Set.functionality s1' s2
+        \in (x1=x2, path $ \lam i => ((sc1m1=sc2m2 i).1, Telescope.set (l1=l2 i) (bv12=bv22 i) (sc1m1=sc2m2 i).2))
+
+      | st, eBinop b e1 e2, vInt z1, vInt z2, st1', st2', evBinop {st1} {x1} {y1} b1 p1 q1,
+      evBinop {st2} {x2} {y2} b2 p2 q2 =>
+        \have | (x1=x2', st1=st2) => functionality p1 p2
+              | x1=x2 => path $ \case x1=x2' __ \with { | vInt n => n | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (y1=y2', st1'=st2') => functionality q1' q2
+              | y1=y2 => path $ \case y1=y2' __ \with { | vInt n => n | _ => 0 }
+              | p => path $ \lam i => (x1=x2 i, y1=y2 i)
+              | b1' => transport (\lam (x, y) => EvalBinop b x y z1) p b1
+              | z1=z2 => EvalBinop.functionality b1' b2
+        \in (pmap vInt z1=z2, st1'=st2')
+
+      | st, eCall f {n} xs, x1, x2, st1', st2', evCall {l1} {f1} {st1} {xs1} {vs1} {sc1} {cl1} {m1} p1 q1 g1 ev1,
+      evCall {l2} {f2} {st2} {xs2} {vs2} {sc2} {cl2} {m2} p2 q2 g2 ev2 =>
+        \have | (l1=l2', st1=st2) => functionality p1 p2
+              | l1=l2 => path $ \case l1=l2' __ \with { | vLoc l => l | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (xs1=xs2, sc1m1=sc2m2) => Eval*.functionality q1' q2
+              | p => path $ \lam i => (l1=l2 i, (sc1m1=sc2m2 i).2)
+              | g1' => transport (\lam (l, m) => Telescope.Get m l _) p g1
+              | f1vs1cl1=f2vs2cl2 => Telescope.Get.functionality g1' g2
+              | f1=f2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun f _ _ => f | _ => eSkip }
+              | vs1=vs2' : vs1 = {Array Var} vs2 => path
+                $ \case f1vs1cl1=f2vs2cl2 __  \with { | bvFun _ vs _ => vs | _ => nil }
+              | vs1=vs2 : vs1 = {Array Var n} vs2 => =-n vs1 vs2 vs1=vs2'
+              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => in~ nil }
+              | q => path $ \lam i => (xs1=xs2 i, sc1m1=sc2m2 i, f1=f2 i, vs1=vs2 i, cl1=cl2 i)
+              | ev1' => transport (\lam (xs', (sc, m), f', vs, cl') => Eval (Scope.args vs xs', m) cl' f' _ _) q ev1
+        \in functionality ev1' ev2
+
+      | st, eSubscript e1 e2, x1, x2, (sc1, m1), (sc2, m2), evSubscript {l1} {st1} {i1} {bv1} p1 q1 g1 g1',
+      evSubscript {l2} {st2} {i2} {bv2} p2 q2 g2 g2' =>
+        \have | (l1=l2', st1=st2) => functionality p1 p2
+              | l1=l2 => path $ \case l1=l2' __ \with { | vLoc l => l | _ => 0 }
+              | q1' => transport _ st1=st2 q1
+              | (i1=i2', sc1m1=sc2m2) => functionality q1' q2
+              | i1=i2 => path $ \case i1=i2' __ \with { | vInt (pos n) => n | vInt (neg n) => n | _ => 0 }
+              | p => path $ \lam i => (l1=l2 i, (sc1m1=sc2m2 i).2)
+              | g1'' => transport (\lam (l, m) => Telescope.Get m l bv1) p g1
+              | bv1=bv2 => Telescope.Get.functionality g1'' g2
+              | q => path $ \lam i => (i1=i2 i, bv1=bv2 i)
+              | g1''' => transport (\lam (i, bv) => BoxedValue.Get i x1 bv) q g1'
+              | x1=x2 => BoxedValue.Get.functionality g1''' g2'
+        \in (x1=x2, sc1m1=sc2m2)
+
+      | (sc, m), eVar v, x1, x2, st1, st2, evVarScope idp p, evVarScope idp q => (Telescope.Get.functionality p q, idp)
+      | (sc, m), eVar v, x1, x2, st1, st2, evVarScope _ p, evVarClosure _ n _ => \case n x1 p
+      | (sc, m), eVar v, x1, x2, st1, st2, evVarClosure _ n _, evVarScope _ p => \case n x2 p
+      | (sc, m), eVar v, x1, x2, st1, st2, evVarClosure idp _ p, evVarClosure idp _ q =>
+        (Telescope.Get.functionality p q, idp)
+
+      | st, eInt n, vInt n1, vInt n2, st1, st2, evInt idp idp, evInt idp idp => (idp, idp)
+      | (sc, m), eString s, vLoc l1, vLoc l2, (sc1, m1), (sc2, m2), evString idp p idp, evString idp q idp =>
+        \have l1=l2 => Memory.NextLoc.functionality p q \in rewrite l1=l2 (idp, idp)
+
+      | (sc, m), eFun vs e, vLoc l1, vLoc l2, (sc1, m1), (sc2, m2), evFun idp p idp, evFun idp q idp =>
+        \have l1=l2 => Memory.NextLoc.functionality p q \in rewrite l1=l2 (idp, idp)
+
+      | st, eSkip, vInt 0, vInt 0, st1, st2, evSkip idp, evSkip idp => (idp, idp)
+      | st, eArray {n} xs, vLoc l1, vLoc l2, (sc1, m1'), (sc2, m2'), evArray {xs1} {m1} p1 q1 idp,
+      evArray {xs2} {m2} p2 q2 idp =>
+        \have | (xs1=xs2, sc1m1=sc2m2) => Eval*.functionality p1 p2
+              | sc1=sc2 => path $ \lam i => (sc1m1=sc2m2 i).1
+              | m1=m2 => path $ \lam i => (sc1m1=sc2m2 i).2
+              | q1' => transport _ m1=m2 q1
+              | l1=l2 => Memory.NextLoc.functionality q1' q2
+              | p => path $ \lam i => (xs1=xs2 i, sc1=sc2 i, m1=m2 i, l1=l2 i)
+        \in (pmap vLoc l1=l2, path $ \case p __ \with { | (xs', sc, m, l) => (sc, Telescope.set l (bvArray xs') m) })
+
+      | st, eSexp lb {n} xs, vLoc l1, vLoc l2, (sc1, m1'), (sc2, m2'), evSexp {xs1} {m1} p1 q1 idp,
+      evSexp {xs2} {m2} p2 q2 idp =>
+        \have | (xs1=xs2, sc1m1=sc2m2) => Eval*.functionality p1 p2
+              | sc1=sc2 => path $ \lam i => (sc1m1=sc2m2 i).1
+              | m1=m2 => path $ \lam i => (sc1m1=sc2m2 i).2
+              | q1' => transport _ m1=m2 q1
+              | l1=l2 => Memory.NextLoc.functionality q1' q2
+              | p => path $ \lam i => (xs1=xs2 i, sc1=sc2 i, m1=m2 i, l1=l2 i)
+        \in (pmap vLoc l1=l2, path $ \case p __ \with { | (xs', sc, m, l) => (sc, Telescope.set l (bvSexp lb xs') m) })
+
+      | st, eIf c t _, x1, x2, st1', st2', evIfTrue {c1} {st1} p1 _ q1, evIfTrue {c2} {st2} p2 _ q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+        \in functionality q1' q2
+
+      | st, eIf c t f, x1, x2, st1', st2', evIfTrue {c'} p n _, evIfFalse q _ =>
+        \have (c'=0', _) => functionality p q \in \case n $ path $ \case c'=0' __ \with { | vInt n => n | _ => 0 }
+
+      | st, eIf c t f, x1, x2, st1', st2', evIfFalse q _, evIfTrue {c'} p n _ =>
+        \have (c'=0', _) => functionality p q \in \case n $ path $ \case c'=0' __ \with { | vInt n => n | _ => 0 }
+
+      | st, eIf c _ f, x1, x2, st1', st2', evIfFalse {st1} p1 q1, evIfFalse {st2} p2 q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+        \in functionality q1' q2
+
+      | st, eWhile c b, vInt 0, vInt 0, st1', st2', evWhileTrue {c1} {st1} p1 _ q1, evWhileTrue {c2} {st2} p2 _ q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (_, st1'=st2') => functionality q1' q2
+        \in (idp, st1'=st2')
+
+      | st, eWhile c b, vInt 0, vInt 0, st1, st2, evWhileTrue {c'} p n _, evWhileFalse q =>
+        \have (c'=0, _) => functionality p q \in \case n $ path $ \case c'=0 __ \with { | vInt n => n | _ => 0 }
+
+      | st, eWhile c b, vInt 0, vInt 0, st1, st2, evWhileFalse q, evWhileTrue {c'} p n _ =>
+        \have (c'=0, _) => functionality p q \in \case n $ path $ \case c'=0 __ \with { | vInt n => n | _ => 0 }
+
+      | st, eWhile c b, vInt 0, vInt 0, st1, st2, evWhileFalse p, evWhileFalse q =>
+        \have (_, st1=st2) => functionality p q \in (idp, st1=st2)
+
+      | st, eDo b c, vInt 0, vInt 0, st1'', st2'', evDoTrue {x1} {c1} {st1} {st1'} ev1 p1 _ q1,
+      evDoTrue {x2} {c2} {st2} {c2'} ev2 p2 _ q2 =>
+        \have | (_, st1=st2) => functionality ev1 ev2
+              | p1' => transport _ st1=st2 p1
+              | (_, st1'=st2') => functionality p1' p2
+              | q1' => transport _ st1'=st2' q1
+              | (_, st1''=st2'') => functionality q1' q2
+        \in (idp, st1''=st2'')
+
+      | st, eDo b c, vInt 0, vInt 0, st1', st2', evDoTrue {x1} {c'} {st1} p1 q1 n _, evDoFalse {x2} {st2} p2 q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (c'=0', _) => functionality q1' q2
+        \in \case n $ path \case c'=0' __ \with { | vInt n => n | _ => 0 }
+
+      | st, eDo b c, vInt 0, vInt 0, st1', st2', evDoFalse {x1} {st1} p1 q1, evDoTrue {x2} {c'} {st2} p2 q2 n _ =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (c'=0', _) => functionality q1' q2
+        \in \case n $ inv $ path \case c'=0' __ \with { | vInt n => n | _ => 0 }
+
+      | st, eDo b c, vInt 0, vInt 0, st1', st2', evDoFalse {x1} {st1} p1 q1, evDoFalse {x2} {st2} p2 q2 =>
+        \have | (_, st1=st2) => functionality p1 p2
+              | q1' => transport _ st1=st2 q1
+              | (_, st1'=st2') => functionality q1' q2
+        \in (idp, st1'=st2')
+
+      | st, eCase e {n} pbs, x1, x2, st1', st2', evCase {x1'} {st1} p1 q1, evCase {x2'} {st2} p2 q2 =>
+        \have | (x1'=x2', st1=st2) => functionality p1 p2
+              | p => path $ \lam i => (x1'=x2' i, st1=st2 i)
+              | q1' => transport (\lam (x', st') => EvalCase st' cl x' pbs x1 st1') p q1
+        \in EvalCase.functionality q1' q2
   }
 
 -- multiple expressions evaluation left to right
@@ -335,12 +682,15 @@
   \where {
 
     \use \level levelProp {st : State} {cl : Scope} {n : Nat} {es : Array Expr n} {xs : Array Value n} {st' : State}
-                          (p q : Eval* st cl es xs st') : p = q \elim n, es, xs, st', p, q
+      : isProp (Eval* st cl es xs st') => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {n : Nat} {es : Array Expr n} {xs : Array Value n} {st' : State}
+                      (p q : Eval* st cl es xs st') : p = q \elim n, es, xs, st', p, q
       | 0, nil, nil, st', ev*Nil p1, ev*Nil p2 => pmap ev*Nil propPath
       | suc n1, e :: es, x :: xs, st'', ev*Cons {st1} p1 q1, ev*Cons {st2} p2 q2 =>
-        \have (_, p) => Eval.functionality p1 p2
-        \in transport (\lam st' => \Pi (a : _) (b : _) -> ev*Cons p1 q1 = ev*Cons {_} {_} {_} {_} {_} {_} {_} {_} {st'} a b)
-            p (\lam a b => pmap2 ev*Cons (Eval.levelProp p1 a) (levelProp q1 b)) p2 q2
+        \have (_, p) => Eval.functionality p1 p2 \in transport (\lam st' => \Pi (a : _) (b : _) -> ev*Cons p1 q1
+          = ev*Cons {_} {_} {_} {_} {_} {_} {_} {_} {st'} a b)
+            p (\lam a b => pmap2 ev*Cons (Eval.levelProp' p1 a) (levelProp' q1 b)) p2 q2
 
     \lemma functionality {st : State} {cl : Scope} {n : Nat} {es : Array Expr n} {xs1 xs2 : Array Value n}
                          {st1 st2 : State} (p : Eval* st cl es xs1 st1) (q : Eval* st cl es xs2 st2)
@@ -358,13 +708,16 @@
                                                      (Eval st' cl e2 (vInt i) st'')
   \where {
 
-    \use \level levelProp {st : State} {cl : Scope} {e : Expr} {r : Ref} {st' : State} (p q : EvalRef st cl e r st')
+    \use \level levelProp {st : State} {cl : Scope} {e : Expr} {r : Ref} {st' : State} : isProp (EvalRef st cl e r st')
+      => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {e : Expr} {r : Ref} {st' : State} (p q : EvalRef st cl e r st')
       : p = q \elim e, r, st', p, q
       | eVar v, rVar v', st', erVar p1 q1, erVar p2 q2 => pmap2 erVar propPath propPath
       | eSubscript e1 e2, rElem l i, st'', erSubscript {st1} p1 q1, erSubscript {st2} p2 q2 =>
-        \have (_, p) => Eval.functionality p1 p2
-        \in transport (\lam st' => \Pi (a : _) (b : _) -> erSubscript p1 q1 = erSubscript {_} {_} {_} {_} {_} {_} {_} {st'} a b)
-            p (\lam a b => pmap2 erSubscript (Eval.levelProp p1 a) (Eval.levelProp q1 b)) p2 q2
+        \have (_, p) => Eval.functionality p1 p2 \in transport (\lam st' => \Pi (a : _) (b : _) -> erSubscript p1 q1
+          = erSubscript {_} {_} {_} {_} {_} {_} {_} {st'} a b)
+            p (\lam a b => pmap2 erSubscript (Eval.levelProp' p1 a) (Eval.levelProp' q1 b)) p2 q2
 
     \lemma functionality {st : State} {cl : Scope} {e : Expr} {r1 r2 : Ref} {st1 st2 : State}
                          (p : EvalRef st cl e r1 st1) (q : EvalRef st cl e r2 st2)
@@ -372,7 +725,7 @@
       | eVar v, rVar v1, rVar v2, st1, st2, erVar p1 q1, erVar p2 q2 => (pmap rVar $ inv q1 *> q2, inv p1 *> p2)
       | eSubscript e1 e2, rElem l1 i1, rElem l2 i2, st1', st2', erSubscript {st1} p1 q1, erSubscript {st2} p2 q2 =>
         \have | (pl, pst) => Eval.functionality p1 p2
-              | (qi, qst) => Eval.functionality q1 $ rewriteF (inv pst) q2
+              | (qi, qst) => Eval.functionality (rewriteF pst q1) q2
               | pl' => path $ \case pl __ \with { | vLoc l => l | _ => 0 }
               | qi' => path $ \case qi __ \with { | vInt (pos i) => i | vInt (neg i) => i | _ => 0 }
         \in (pmap2 rElem pl' qi', qst)
@@ -384,17 +737,21 @@
                                              (Memory.NextLoc m l) (sc' = Telescope.set v (vLoc l) sc)
   \where {
 
-    \use \level levelProp {st : State} {cl : Scope} {d : Def} {st' : State} (p q : EvalDef st cl d st')
+    \use \level levelProp {st : State} {cl : Scope} {d : Def} {st' : State} : isProp (EvalDef st cl d st') => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {d : Def} {st' : State} (p q : EvalDef st cl d st')
       : p = q \elim st, d, st', p, q
       | st, dVar v e, (sc', m), edVar {x1} {sc1} p1 q1, edVar {x2} {sc2} p2 q2 =>
         \have p : (x1, (sc1, m)) = (x2, (sc2, m)) => ext $ Eval.functionality p1 p2
-        \in transport (\lam (x, (sc, _)) => \Pi (a : _) (b : _) -> edVar p1 q1 = edVar {_} {_} {_} {_} {_} {_} {x} {sc} a b)
-            p (\lam a b => pmap2 edVar (Eval.levelProp p1 a) propPath) p2 q2
+        \in transport (\lam (x, (sc, _)) => \Pi (a : _) (b : _) -> edVar p1 q1
+          = edVar {_} {_} {_} {_} {_} {_} {x} {sc} a b)
+            p (\lam a b => pmap2 edVar (Eval.levelProp' p1 a) propPath) p2 q2
 
       | (sc, m), dFun v vs e, (sc', m'), edFun {l1} p1 n1 q1, edFun {l2} p2 n2 q2 =>
         \have | pl' => Telescope.set.inj $ inv q1 *> q2
               | pl : l1 = l2 => path $ \case pl' __ \with { | vLoc l => l | _ => 0 }
-        \in transport (\lam l => \Pi (a : _) (b : _) (c : _) -> edFun p1 n1 q1 = edFun {_} {_} {_} {_} {_} {_} {_} {_} {l} a b c)
+        \in transport (\lam l => \Pi (a : _) (b : _) (c : _) -> edFun p1 n1 q1
+          = edFun {_} {_} {_} {_} {_} {_} {_} {_} {l} a b c)
             pl (\lam a b c => path $ \lam i => edFun (propPath i) (propPath i) (propPath i)) p2 n2 q2
 
     \lemma functionality {st : State} {cl : Scope} {d : Def} {st1 st2 : State}
@@ -404,6 +761,7 @@
         \have | p : (x1, (sc1, m1)) = (x2, (sc2, m2)) => ext $ Eval.functionality p1 p2
               | q : sc1' = sc2' => transport (\lam (x, (sc, _)) => sc1' = Telescope.set v x sc) p q1 *> inv q2
         \in ext (q, path $ \lam i => (p i).2.2)
+
       | (sc, m), dFun v vs e, (sc1', m1'), (sc2', m2'), edFun {l1} p1 n1 q1, edFun {l2} p2 n2 q2 =>
         \have | pl : l1 = l2 => Memory.NextLoc.functionality n1 n2
               | p => path $ \lam i => (q1 i, p1 i)
@@ -417,59 +775,68 @@
   \where {
 
     \use \level levelProp {st : State} {cl : Scope} {n : Nat} {ds : Array Def n} {st' : State}
-                          (p q : EvalDef* st cl ds st')
+      : isProp (EvalDef* st cl ds st') => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {n : Nat} {ds : Array Def n} {st' : State}
+                      (p q : EvalDef* st cl ds st')
       : p = q \elim n, ds, st', p, q
       | 0, nil, st', ed*Nil p1, ed*Nil p2 => pmap ed*Nil propPath
       | suc n, d :: ds, st'', ed*Cons {st1} p1 q1, ed*Cons {st2} p2 q2 =>
-        \have p => EvalDef.functionality p1 p2
-        \in transport (\lam st' => \Pi (a : _) (b : _) -> ed*Cons p1 q1 = ed*Cons {_} {_} {_} {_} {_} {_} {st'} a b)
-            p (\lam a b => pmap2 ed*Cons (EvalDef.levelProp p1 a) (levelProp q1 b)) p2 q2
+        \have p => EvalDef.functionality p1 p2 \in transport (\lam st' => \Pi (a : _) (b : _) -> ed*Cons p1 q1
+          = ed*Cons {_} {_} {_} {_} {_} {_} {st'} a b)
+            p (\lam a b => pmap2 ed*Cons (EvalDef.levelProp' p1 a) (levelProp' q1 b)) p2 q2
 
     \lemma functionality {st : State} {cl : Scope} {n : Nat} {ds : Array Def n} {st1 st2 : State}
                          (p : EvalDef* st cl ds st1) (q : EvalDef* st cl ds st2)
       : st1 = st2 \elim n, ds, st1, st2, p, q
       | 0, nil, st1, st2, ed*Nil p1, ed*Nil p2 => inv p1 *> p2
       | suc n, d :: ds, st1', st2', ed*Cons {st1} p1 q1, ed*Cons {st2} p2 q2 =>
-        \have | p => EvalDef.functionality p1 p2 \in EvalDef*.functionality (rewriteF p q1) q2
+        \have p => EvalDef.functionality p1 p2 \in EvalDef*.functionality (rewriteF p q1) q2
   }
 
 \data EvalCase (st : State) (cl : Scope) (x : Value) {n : Nat} (pbs : Array (\Sigma Pattern Expr) n)
                (y : Value) (st' : State) : \Set \elim st, n, pbs, st'
   | (sc, m), suc _, (p, e) :: pbs, (sc', m') => ecHead {sc1 : Scope.Scope'} {sc2 : Scope} (Match m x p sc1)
-                                                       (Eval (Telescope.concat (in~ sc1) sc, m) cl e y (Telescope.concat sc2 sc', m'))
+                                                       (Eval (Telescope.concat (in~ sc1) sc, m) cl e y
+                                                           (Telescope.concat sc2 sc', m'))
                                                        (Scope.Nested ((\lam p => p.1) o sc1) sc2 sc')
   | (sc, m), suc _, (p, _) :: pbs, st' => ecTail (\Pi (sc : Scope.Scope') -> Not (Match m x p sc))
                                                  (EvalCase (sc, m) cl x pbs y st')
   \where {
 
     \use \level levelProp {st : State} {cl : Scope} {x : Value} {n : Nat} {pbs : Array (\Sigma Pattern Expr) n}
-                          {y : Value} {st' : State} (p q : EvalCase st cl x pbs y st')
+                          {y : Value} {st' : State}
+      : isProp (EvalCase st cl x pbs y st') => levelProp'
+
+    \lemma levelProp' {st : State} {cl : Scope} {x : Value} {n : Nat} {pbs : Array (\Sigma Pattern Expr) n}
+                      {y : Value} {st' : State} (p q : EvalCase st cl x pbs y st')
       : p = q \elim st, n, pbs, st', p, q
       | (sc, m), suc n, (pat, body) :: pbs, (sc', m'), ecHead {sc11} {sc12} m1 e1 p1, ecHead {sc21} {sc22} m2 e2 p2 =>
         \have | sc11=sc21 => Match.functionality m1 m2
-              | (_, p) => Eval.functionality e1 (rewrite sc11=sc21 e2)
-              | p1' => transport (\lam (sc : Scope.Scope') => Scope.Nested ((\lam p => p.1) o sc) sc12 sc') sc11=sc21 p1
+              | (_, p) => Eval.functionality (rewriteF sc11=sc21 e1) e2
+              | p1' => transport _ sc11=sc21 p1
               | (sc12=sc22 : sc12 = sc22, _) => Scope.Nested.property {(\lam p => p.1) o sc21}
                   (path $ \lam i => (p i).1) p1' p2
               | q => path $ \lam i => (sc11=sc21 i, sc12=sc22 i)
         \in transport (\lam (sc1, sc2) => \Pi (a : _) (b : _) (c : Scope.Nested ((\lam p => p.1) o sc1) sc2 sc')
         -> ecHead m1 e1 p1 = ecHead {_} {_} {_} {_} {_} {_} {_} {_} {_} {_} {_} {sc1} {sc2} a b c)
-            q (\lam a b c => path $ \lam i => ecHead (propPath i) (Eval.levelProp e1 b i) (propPath i)) m2 e2 p2
+            q (\lam a b c => path $ \lam i => ecHead (propPath i) (Eval.levelProp' e1 b i) (propPath i)) m2 e2 p2
 
       | (sc, m), suc _, (p, e) :: pbs1, (sc', m'), ecHead m1 _ _, ecTail n _ => \case n _ m1
       | (sc, m), suc _, (p, e) :: pbs1, (sc', m'), ecTail n _, ecHead m1 _ _ => \case n _ m1
       | (sc, m), suc n, (p, e) :: pbs1, st', ecTail n1 p1, ecTail n2 p2 =>
-        pmap2 ecTail propPath $ EvalCase.levelProp p1 p2
+        pmap2 ecTail propPath $ levelProp' p1 p2
 
     \lemma functionality {st : State} {cl : Scope} {x : Value} {n : Nat} {pbs : Array (\Sigma Pattern Expr) n}
                          {y1 y2 : Value} {st1 st2 : State}
                          (p : EvalCase st cl x pbs y1 st1) (q : EvalCase st cl x pbs y2 st2)
       : \Sigma (y1 = y2) (st1 = st2) \elim st, n, pbs, st1, st2, p, q
-      | (sc, m), suc n, ((pat, body)) :: pbs, (sc1', m1'), (sc2', m2'), ecHead {sc11} {sc12} m1 e1 p1, ecHead {sc21} {sc22} m2 e2 p2 =>
+      | (sc, m), suc n, ((pat, body)) :: pbs, (sc1', m1'), (sc2', m2'), ecHead {sc11} {sc12} m1 e1 p1,
+      ecHead {sc21} {sc22} m2 e2 p2 =>
         \have | sc11=sc21 => Match.functionality m1 m2
-              | (y1=y2, p) => Eval.functionality e1 (rewrite sc11=sc21 e2)
+              | (y1=y2, p) => Eval.functionality (rewriteF sc11=sc21 e1) e2
               | p' => path $ \lam i => (p i).1
-              | p1' => transport (\lam (sc : Scope.Scope') => Scope.Nested ((\lam p => p.1) o sc) sc12 sc1') sc11=sc21 p1
+              | p1' => transport _ sc11=sc21 p1
               | (_, sc1'=sc2' : sc1' = sc2') => Scope.Nested.property {(\lam p => p.1) o sc21} p' p1' p2
         \in (y1=y2, path $ \lam i => (sc1'=sc2' i, (p i).2))
 

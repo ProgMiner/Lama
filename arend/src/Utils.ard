@@ -57,3 +57,6 @@
 
 \sfunc =-n {A : \Type} {n : Nat} (xs ys : Array A n) (p : xs = {Array A} ys) : xs = {Array A n} ys \elim p
   | idp => idp {Array A n}
+
+\lemma nat=fin {n : Nat} {i j : Fin n} (p : i = {Nat} j) : i = {Fin n} j \elim p
+  | idp => idp

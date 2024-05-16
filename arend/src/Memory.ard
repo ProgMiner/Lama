@@ -3,11 +3,13 @@
 \import Expr
 \import Logic.Meta
 \import Order.LinearOrder
+\import Paths.Meta
 \import Scope
 \import Telescope
 \import Logic
 \import Paths
-\import Set (DecSet)
+\import Set (DecSet, decideEq, no, yes)
+\import Utils
 
 \data BoxedValue
   | bvString String
@@ -43,6 +45,12 @@
               : getSexp p1 q1 = {Get i y (bvSexp l xs)} getSexp p2 q2 \elim p1, p2, q1
               | idp, idp, idp => pmap (getSexp _) propPath
           }
+
+        \lemma functionality {i : Nat} {y1 y2 : Value} {x : BoxedValue} (p : Get i y1 x) (q : Get i y2 x)
+          : y1 = y2 \elim x, p, q
+          | bvString s, getString {i1} idp idp, getString {i2} idp idp => idp
+          | bvArray xs, getArray {i1} idp idp, getArray {i2} idp idp => idp
+          | bvSexp _ xs, getSexp {i1} idp idp, getSexp {i2} idp idp => idp
       }
 
     \data Set (i : Nat) (y : Value) (x x' : BoxedValue) \elim y, x, x'
@@ -119,6 +127,46 @@
               | idp => Jl (\lam p2'' p => \Pi (a : _) (b : _) (c : _) -> setSexp idp idp idp q1 idp = setSexp c idp p2'' a b)
                   (\lam q3 q4 q5 => path $ \lam i => setSexp (propPath @ i) idp idp (propPath @ i) (propPath @ i))
                   (propPath {_} {idp} {p2'}) q2 q2' p'
+          }
+
+        \lemma functionality {i : Nat} {y : Value} {x x1 x2 : BoxedValue} (p : Set i y x x1) (q : Set i y x x2)
+          : x1 = x2 \elim y, x, x1, x2, p, q
+          | vInt y, bvString s, bvString s1, bvString s2, setString {i1} c1 p1 qs1 q1, setString {i2} c2 p2 qs2 q2 =>
+            pmap bvString $ lem p1 c1 p2 c2 q1 q2 qs1 qs2
+
+          | y, bvArray xs, bvArray xs1, bvArray xs2, setArray {i1} c1 p1 qs1 q1, setArray {i2} c2 p2 qs2 q2 =>
+            pmap bvArray $ lem p1 c1 p2 c2 q1 q2 qs1 qs2
+
+          | y, bvSexp l xs, bvSexp l1 xs1, bvSexp l2 xs2, setSexp l=l1 {i1} c1 p1 qs1 q1, setSexp l=l2 {i2} c2 p2 qs2 q2 =>
+            pmap2 bvSexp (inv l=l1 *> l=l2) $ lem p1 c1 p2 c2 q1 q2 qs1 qs2
+          \where {
+
+            \sfunc lem {A : \Type} {i : Nat} {x : A} {xs xs1 xs2 : Array A}
+                      (p1 : DArray.len {xs} = DArray.len {xs1}) {i1 : Fin (DArray.len {xs})} (c1 : i = {Nat} i1)
+                      (p2 : DArray.len {xs} = DArray.len {xs2}) {i2 : Fin (DArray.len {xs})} (c2 : i = {Nat} i2)
+                      (q1 : xs1 (transport Fin p1 i1) = x) (q2 : xs2 (transport Fin p2 i2) = x)
+                      (qs1 : \Pi (j : Fin (DArray.len {xs})) -> j /= i1 -> xs j = xs1 (transport Fin p1 j))
+                      (qs2 : \Pi (j : Fin (DArray.len {xs})) -> j /= i2 -> xs j = xs2 (transport Fin p2 j))
+              : xs1 = xs2 => \let n => DArray.len {xs} \in
+              \have | xs1=xs2' (j : Fin n) : xs1 (transport Fin p1 j) = xs2 (transport Fin p2 j)
+              => \case NatSemiring.decideEq j i \with {
+                  | yes e =>
+                    xs1 (transport Fin p1 j) ==< pmap (\lam j' => xs1 (transport Fin p1 j')) (nat=fin $ e *> c1) >==
+                    xs1 (transport Fin p1 i1) ==< q1 *> inv q2 >==
+                    xs2 (transport Fin p2 i2) ==< pmap (\lam j' => xs2 (transport Fin p2 j')) (nat=fin $ inv $ e *> c2) >==
+                    xs2 (transport Fin p2 j) `qed
+                  | no n' =>
+                    xs1 (transport Fin p1 j) ==< inv (qs1 _ (\lam p => n' $ p *> inv c1)) >==
+                    xs j ==< qs2 _ (\lam p => n' $ p *> inv c2) >==
+                    xs2 (transport Fin p2 j) `qed
+                }
+                    | xs1=xs2'' (j : Fin (DArray.len {xs1})) : xs1 j = xs2 (transport Fin (inv p1 *> p2) j) =>
+                      xs1 j ==< pmap (\lam q => xs1 (transport Fin q j)) (inv $ inv_*> p1) >==
+                      xs1 (transport Fin (inv p1 *> p1) j) ==< pmap (xs1 __) (transport_*> Fin _ _ _) >==
+                      xs1 (transport Fin p1 $ transport Fin (inv p1) j) ==< xs1=xs2' (transport Fin (inv p1) j) >==
+                      xs2 (transport Fin p2 $ transport Fin (inv p1) j) ==< pmap (xs2 __) (inv $ transport_*> Fin _ _ _) >==
+                      xs2 (transport Fin (inv p1 *> p2) j) `qed
+              \in exts (inv p1 *> p2, xs1=xs2'')
           }
       }
   }
