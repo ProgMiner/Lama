@@ -1,0 +1,16 @@
+\import Eval
+\import Expr
+\import Logic
+\import Scope
+
+\func while-true-not-terminate {e : Expr} {st st' : State} {v : Value} {cl : Scope}
+  : Not (Eval st cl (eWhile (eInt 1) e) v st') => proof
+  \where {
+
+    \func proof {e : Expr} {st st' : State} {v : Value} {cl : Scope} (p : Eval st cl (eWhile (eInt 1) e) v st')
+      : Empty \elim st, st', v, p
+      | st, st', vInt 0, evWhileTrue _ _ p => proof p
+      | st, st', vInt 0, evWhileFalse p => \case st \as st, st' \as st', p : Eval st _ _ _ st' \with {
+        | st, st', evInt p1 ()
+      }
+  }

@@ -18,6 +18,7 @@
     </option>
     <option name="goalPrintingOptions">
       <ArendPrintingOptions>
+        <option name="showConstructorParameters" value="true" />
         <option name="showLocalFieldInstance" value="false" />
       </ArendPrintingOptions>
     </option>

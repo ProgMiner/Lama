@@ -41,7 +41,7 @@
   | eVar Var
   | eInt Int
   | eString String
-  | eFun (Array Var) Expr
+  | eFun {n : Nat} (Array Var n) Expr
   | eSkip
   | eArray {n : Nat} (Array Expr n)
   | eSexp Label {n : Nat} (Array Expr n)
@@ -52,7 +52,7 @@
 
 \data Def : \Set
   | dVar Var Expr
-  | dFun Var (Array Var) Expr
+  | dFun Var {n : Nat} (Array Var n) Expr
   \where {
 
     \func var (d : Def) : Var \elim d

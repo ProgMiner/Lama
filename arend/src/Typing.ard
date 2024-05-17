@@ -1,0 +1,180 @@
+\import ConstraintEntailment
+\import Context
+\import Expr
+\import Function
+\import Function.Meta
+\import Logic
+\import Nub
+\import Paths.Meta
+\import Relation.Equivalence
+\import Telescope
+\import Type
+\import Data.Array
+\import Paths
+\import HLevel
+\import Utils
+
+\data TypingPat (p : Pattern) (tp : TPattern) (ctx : Context.Context') \elim p, tp, ctx
+  | pWildcard, tpWildcard, nil => typWildcard
+  | pNamed v p, tpTyped t tp, ctx => typNamed {ctx' : Context.Context'} (TypingPat p tp ctx')
+                                              (ctx = ctx' ++ ((v, t) :: nil))
+  | pArray {n} ps, tpArray {n'} tps, ctx => typArray {ctxs : Array Context.Context' n}
+                                                     (p : n = n') (ctx = fold (++) nil ctxs)
+                                                     (\Pi (i : Fin n) -> TypingPat (ps i) (tps (transport Fin p i))
+                                                         (ctxs i))
+  | pSexp lb {n} ps, tpSexp lb' {n'} tps, ctx => typSexp {ctxs : Array Context.Context' n}
+                                                         (lb = lb') (p : n = n') (ctx = fold (++) nil ctxs)
+                                                         (\Pi (i : Fin n) -> TypingPat (ps i) (tps (transport Fin p i))
+                                                         (ctxs i))
+  | pInt _, tpUnboxed, nil => typInt
+  | pString _, tpStringShape, nil => typString
+  | pBoxed, tpBoxed, nil => typBoxed
+  | pUnboxed, tpUnboxed, nil => typUnboxed
+  | pStringShape, tpStringShape, nil => typStringShape
+  | pArrayShape, tpArrayShape, nil => typArrayShape
+  | pSexpShape, tpSexpShape, nil => typSexpShape
+  | pFunShape, tpFunShape, nil => typFunShape
+  \where {
+
+    \use \level levelProp {pat : Pattern} {tp : TPattern} {ctx : Context.Context'}
+      : isProp (TypingPat pat tp ctx) => levelProp'
+
+    \sfunc levelProp' {pat : Pattern} {tp : TPattern} {ctx : Context.Context'} (p q : TypingPat pat tp ctx)
+      : p = q \elim pat, tp, ctx, p, q
+      | pWildcard, tpWildcard, nil, typWildcard, typWildcard => idp
+      | pNamed v pat, tpTyped t tp, ctx, typNamed {ctx1} p1 idp, typNamed {ctx2} p2 q =>
+        \have | q' => inv (rev.++-lem ctx1 _) *> pmap rev q *> rev.++-lem ctx2 _
+              | ctx1=ctx2' => ::-inj-right q'
+              | ctx1=ctx2 => inv (rev.involutive ctx1) *> pmap rev ctx1=ctx2' *> rev.involutive ctx2
+        \in transport (\lam ctx' => \Pi (a : _) (b : _ = ctx' ++ _) -> typNamed p1 idp
+          = typNamed {_} {_} {_} {_} {_} {ctx'} a b)
+            ctx1=ctx2 (\lam a b => path $ \lam i => typNamed (levelProp' p1 a i) (propPath {_} {idp} {b} i)) p2 q
+
+      | pArray {n} ps, tpArray {n'} tps, ctx, typArray {ctxs1} idp idp qs1, typArray {ctxs2} p2 q2 qs2 =>
+        \have | idp=p2 : idp = p2 => propPath
+              | qs1' => transport (\lam p => \Pi (i : _) -> TypingPat (ps i) (tps (transport Fin p i)) (ctxs1 i))
+            idp=p2 qs1
+              | p (i : Fin n) => functionality (qs1' i) (qs2 i)
+              | p' : ctxs1 = {Array Context.Context' n} ctxs2 => exts p
+        \in transport (\lam (ctxs : Array _ n) => \Pi (a : _) (b : _) (c : _) -> typArray idp idp qs1
+          = typArray {_} {_} {_} {_} {_} {ctxs} a b c)
+            p' (\lam a b c =>
+                \let | a=idp : a = idp => propPath
+                     | c' : \Pi (i : _) -> TypingPat (ps i) (tps i) (ctxs1 i) => transport _ a=idp c
+                     | qs1=c' : qs1 = c' => path $ \lam i j => levelProp' (qs1 j) (c' j) i
+                     | idp=b : idp = {fold (++) nil ctxs1 = fold (++) nil ctxs1} b => propPath
+                     | q : typArray idp idp qs1 = typArray idp b c' => path
+                       $ \lam i => typArray idp (idp=b i) (qs1=c' i)
+                     | r' : transport (\lam a => \Pi (i : Fin n)
+                     -> TypingPat (ps i) (tps (transport Fin a i)) (ctxs1 i)) a=idp c = c' => idp
+                     | r : typArray a b c = typArray idp b c' => Jl (\lam a' pa => \Pi
+                       (c1 : _)
+                       (c=c1 : Path (\lam i => \Pi (j : _) ->
+                           TypingPat (ps j) (tps (transport Fin a' j)) (ctxs1 j)) (transport _ pa c) c1)
+                     -> typArray a b c = typArray a' b c1)
+                         (\lam c1 (pc : c = c1) => pmap _ pc) a=idp c' r'
+                \in q *> inv r) p2 q2 qs2
+
+      | pSexp lb {n} ps, tpSexp lb' {n'} tps, ctx, typSexp {ctxs1} idp idp idp qs1, typSexp {ctxs2} lbp2 p2 q2 qs2 =>
+        \have | idp=p2 : idp = p2 => propPath
+              | qs1' => transport (\lam p => \Pi (i : _) -> TypingPat (ps i) (tps (transport Fin p i)) (ctxs1 i))
+                  idp=p2 qs1
+              | p (i : Fin n) => functionality (qs1' i) (qs2 i)
+              | p' : ctxs1 = {Array Context.Context' n} ctxs2 => exts p
+        \in transport (\lam (ctxs : Array _ n) => \Pi (a : _) (b : _) (c : _) (d : _) -> typSexp idp idp idp qs1
+          = typSexp {_} {_} {_} {_} {_} {_} {_} {ctxs} d a b c)
+            p' (\lam a b c d =>
+                \let | a=idp : a = idp => propPath
+                     | c' : \Pi (i : _) -> TypingPat (ps i) (tps i) (ctxs1 i) => transport _ a=idp c
+                     | qs1=c' : qs1 = c' => path $ \lam i j => levelProp' (qs1 j) (c' j) i
+                     | idp=b : idp = {fold (++) nil ctxs1 = fold (++) nil ctxs1} b => propPath
+                     | idp=d : idp = d => propPath
+                     | q : typSexp idp idp idp qs1 = typSexp d idp b c' => path
+                       $ \lam i => typSexp (idp=d i) idp (idp=b i) (qs1=c' i)
+                     | r' : transport (\lam a => \Pi (i : Fin n)
+                     -> TypingPat (ps i) (tps (transport Fin a i)) (ctxs1 i)) a=idp c = c' => idp
+                     | r : typSexp d a b c = typSexp d idp b c' => Jl (\lam a' pa => \Pi
+                       (c1 : _)
+                       (c=c1 : Path (\lam i => \Pi (j : _) ->
+                           TypingPat (ps j) (tps (transport Fin a' j)) (ctxs1 j)) (transport _ pa c) c1)
+                     -> typSexp d a b c = typSexp d a' b c1)
+                         (\lam c1 (pc : c = c1) => pmap _ pc) a=idp c' r'
+                \in q *> inv r) p2 q2 qs2 lbp2
+
+      | pInt i, tpUnboxed, nil, typInt, typInt => idp
+      | pString s, tpStringShape, nil, typString, typString => idp
+      | pBoxed, tpBoxed, nil, typBoxed, typBoxed => idp
+      | pUnboxed, tpUnboxed, nil, typUnboxed, typUnboxed => idp
+      | pStringShape, tpStringShape, nil, typStringShape, typStringShape => idp
+      | pArrayShape, tpArrayShape, nil, typArrayShape, typArrayShape => idp
+      | pSexpShape, tpSexpShape, nil, typSexpShape, typSexpShape => idp
+      | pFunShape, tpFunShape, nil, typFunShape, typFunShape => idp
+
+    \lemma functionality {pat : Pattern} {tp : TPattern} {ctx1 ctx2 : Context.Context'}
+                         (p : TypingPat pat tp ctx1) (q : TypingPat pat tp ctx2)
+      : ctx1 = ctx2 \elim pat, tp, ctx1, ctx2, p, q
+      | pWildcard, tpWildcard, nil, nil, typWildcard, typWildcard => idp
+      | pNamed v pat, tpTyped t tp, ctx1, ctx2, typNamed {ctx1'} p idp, typNamed {ctx2'} q idp =>
+        \have ctx1'=ctx2' => functionality p q \in path $ \lam i => ctx1'=ctx2' i ++ _
+
+      | pArray {n} ps, tpArray {n'} tps, ctx1, ctx2, typArray {ctxs1} p1 idp qs1, typArray {ctxs2} idp idp qs2 =>
+        \have | qs1' => transport {n = n} _ (propPath {n = n} {p1} {idp}) qs1
+              | p (i : Fin n) => functionality (qs1' i) (qs2 i)
+              | p' : ctxs1 = {Array Context.Context' n} ctxs2 => exts p
+        \in path $ \lam i => fold (++) nil (p' i)
+
+      | pSexp lb {n} ps, tpSexp lb' {n'} tps, ctx1, ctx2, typSexp {ctxs1} _ p1 idp qs1, typSexp {ctxs2} _ idp idp qs2 =>
+        \have | qs1' => transport {n = n} _ (propPath {n = n} {p1} {idp}) qs1
+              | p (i : Fin n) => functionality (qs1' i) (qs2 i)
+              | p' : ctxs1 = {Array Context.Context' n} ctxs2 => exts p
+        \in path $ \lam i => fold (++) nil (p' i)
+
+      | pInt _, tpUnboxed, nil, nil, typInt, typInt => idp
+      | pString _, tpStringShape, nil, nil, typString, typString => idp
+      | pBoxed, tpBoxed, nil, nil, typBoxed, typBoxed => idp
+      | pUnboxed, tpUnboxed, nil, nil, typUnboxed, typUnboxed => idp
+      | pStringShape, tpStringShape, nil, nil, typStringShape, typStringShape => idp
+      | pArrayShape, tpArrayShape, nil, nil, typArrayShape, typArrayShape => idp
+      | pSexpShape, tpSexpShape, nil, nil, typSexpShape, typSexpShape => idp
+      | pFunShape, tpFunShape, nil, nil, typFunShape, typFunShape => idp
+  }
+
+-- Г ; C |- e : T
+-- not an actual \Prop
+\data Typing (ctx : Context) (c : Constraint) (e : Expr) (t : Type) : \Set \elim e, t
+  | eScope {n} ds e, t => tyScope {ctx' : Context} {ts : Array Type n}
+                                  (ctx' = Telescope.concat (Telescope.zip (Def.var o ds) ts) ctx)
+                                  (\Pi (i : Fin n) -> TypingDef ctx' c (ds i)) (Typing ctx' c e t)
+  | eSeq e1 e2, t2 => tySeq {t1 : Type} (Typing ctx c e1 t1) (Typing ctx c e2 t2)
+  | eAssign e1 e2, t => tyAssign (Typing ctx c e1 t) (Typing ctx c e2 t)
+  | eBinop _ e1 e2, tInt => tyBinop (Typing ctx c e1 tInt) (Typing ctx c e2 tInt)
+  | eCall f {n} xs, t => tyCall {tf : Type} {ts : Array Type n} (Typing ctx c f tf)
+                                (\Pi (i : Fin n) -> Typing ctx c (xs i) (ts i)) (Ent c (cCall tf ts t))
+  | eSubscript e1 e2, t2 => tySubscript {t1 : Type} (Typing ctx c e1 t1) (Typing ctx c e2 tInt) (Ent c (cInd t1 t2))
+  | eVar x, t => tyVar (Telescope.Get ctx x t)
+  | eInt 0, t => tyZero
+  | eInt n, tInt => tyInt (n /= 0)
+  | eString _, tString => tyString
+  | eFun {n} vs e, tFun {m} txs c' {n'} ts t => tyFun (p : n = n')
+                                                      (\Pi (i : Fin m) -> \Sigma
+                                                        (Not (Context.InFV (txs i) ctx))
+                                                        (Not (Nub.In (Constraint.fv c) (txs i))))
+                                                      (Typing (Telescope.concat
+                                                          (Telescope.zip (transport _ p vs) ts) ctx)
+                                                          (cAnd c c') e t)
+  | eSkip, t => tySkip
+  | eArray {n} xs, tArray t => tyArray (\Pi (i : Fin n) -> Typing ctx c (xs i) t)
+  | eSexp lb {n} xs, t => tySexp {ts : Array Type n} (\Pi (i : Fin n) -> Typing ctx c (xs i) (ts i))
+                                 (Ent c (cSexp lb t ts))
+  | eIf c' t f, t2 => tyIf {t1 : Type} (Typing ctx c c' t1) (Typing ctx c t t2) (Typing ctx c f t2)
+  | eWhile c' b, t3 => tyWhile {t1 t2 : Type} (Typing ctx c c' t1) (Typing ctx c b t2)
+  | eDo b c', t3 => tyDo {t1 t2 : Type} (Typing ctx c c' t1) (Typing ctx c b t2)
+  | eCase e {n} pbs, t2 => tyCase {t1 : Type} {ctxs : Array Context.Context' n} {ps : Array TPattern n}
+                                  (Typing ctx c e t1) (Ent c (cMatch t1 ps))
+                                  (\Pi (i : Fin n) -> TypingPat (pbs i).1 (ps i) (ctxs i))
+                                  (\Pi (i : Fin n) -> Typing (Telescope.concat (in~ (ctxs i)) ctx) c (pbs i).2 t2)
+
+-- Г ; C |- d
+\data TypingDef (ctx : Context) (c : Constraint) (d : Def) : \Set \elim d
+  | dVar v e => tdVar {t : Type} (Typing ctx c e t) (Telescope.Get ctx v t)
+  | dFun v {n} xs e => tdFun (TypingDef ctx c (dVar v (eFun xs e)))

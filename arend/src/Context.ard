@@ -1,0 +1,18 @@
+\import Arith.Nat
+\import Expr
+\import Logic
+\import Nub
+\import Set
+\import Telescope
+\import Type
+
+\func Context => Telescope (NatSemiring : DecSet Var) Type
+  \where {
+
+    \open Telescope
+
+    \func Context' => Telescope' (NatSemiring : DecSet Var) Type
+
+    \func InFV (tv : TVar) (ctx : Context) : \Prop =>
+      TruncP (\Sigma (v : Var) (t : Type) (Get ctx v t) (Nub.In (Type.fv t) tv))
+  }

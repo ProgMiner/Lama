@@ -1,0 +1,4 @@
+\import Type
+
+-- TODO
+\data Ent (c c' : Constraint) : \Set

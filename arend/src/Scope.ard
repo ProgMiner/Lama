@@ -29,10 +29,6 @@
       | nil => sc
       | v :: vs => set v (vInt 0) $ init vs sc
 
-    \func args {n : Nat} (vs : Array Var n) (xs : Array Value n) : Scope \elim n, vs, xs
-      | 0, nil, nil => in~ nil
-      | suc n, v :: vs, x :: xs => set v x $ args vs xs
-
     \func Nested (vs : Array Var) (sc sc' : Scope) : \Prop => \Pi (v : Var) -> \Sigma
       (TruncP (Index v vs) <-> ∃ (x : Value) (Telescope.Get sc v x))
       (∃ (x : Value) (Telescope.Get sc v x) -> Not (∃ (x : Value) (Telescope.Get sc' v x)))

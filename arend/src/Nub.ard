@@ -1,0 +1,22 @@
+\import Data.Array
+\import Relation.Equivalence
+\import Set
+\import Telescope
+
+\func Nub (K : DecSet) => Telescope K (\Sigma)
+  \where {
+
+    \open Telescope
+
+    \func Nub' (K : DecSet) => Telescope' K (\Sigma)
+
+    \func In {K : DecSet} (n : Nub K) (k : K) : \Prop => Get n k ()
+
+    \func add {K : DecSet} (k : K) (n : Nub K) : Nub K => set k () n
+
+    \func union {K : DecSet} (n1 n2 : Nub K) : Nub K => concat n1 n2
+
+    \func remove {K : DecSet} (k : K) (n : Nub K) : Nub K => unset k n
+
+    \func remove* {K : DecSet} (ks : Array K) (n : Nub K) : Nub K => erase ks n
+  }

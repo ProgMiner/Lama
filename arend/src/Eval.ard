@@ -233,7 +233,7 @@
                                           {vs : Array Var n} {sc cl' : Scope} {m : Memory}
                                           (Eval st cl f (vLoc l) st') (Eval* st' cl xs xs' (sc, m))
                                           (Telescope.Get m l (bvFun f' vs cl'))
-                                          (Eval (Scope.args vs xs', m) cl' f' x st'')
+                                          (Eval (Telescope.zip vs xs', m) cl' f' x st'')
   | st, eSubscript e1 e2, x, (sc, m) => evSubscript {l : Loc} {st' : State} {i : Nat} {bv : BoxedValue}
                                                     (Eval st cl e1 (vLoc l) st') (Eval st' cl e2 (vInt i) (sc, m))
                                                     (Telescope.Get m l bv) (BoxedValue.Get i x bv)
@@ -243,8 +243,8 @@
   | st, eInt n, vInt n', st' => evInt (st = st') (n = n')
   | (sc, m), eString s, vLoc l, (sc', m') => evString (sc = sc') (Memory.NextLoc m l)
                                                       (m' = Telescope.set l (bvString s) m)
-  | (sc, m), eFun vs e, vLoc l, (sc', m') => evFun (sc = sc') (Memory.NextLoc m l)
-                                                   (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
+  | (sc, m), eFun {n} vs e, vLoc l, (sc', m') => evFun (sc = sc') (Memory.NextLoc m l)
+                                                       (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
   | st, eSkip, vInt 0, st' => evSkip (st = st')
   | st, eArray {n} xs, vLoc l, (sc, m') => evArray {xs' : Array Value n} {m : Memory}
                                                    (Eval* st cl xs xs' (sc, m)) (Memory.NextLoc m l)
@@ -387,7 +387,7 @@
       | (sc, m), eString s, vLoc l, (sc', m'), evString p1 q1 n1, evString p2 q2 n2
       => path $ \lam i => evString (propPath i) (propPath i) (propPath i)
 
-      | (sc, m), eFun a e1, vLoc l, (sc', m'), evFun p1 q1 n1, evFun p2 q2 n2
+      | (sc, m), eFun {n} vs e, vLoc l, (sc', m'), evFun p1 q1 n1, evFun p2 q2 n2
       => path $ \lam i => evFun (propPath i) (propPath i) (propPath i)
 
       | st, eSkip, vInt 0, st', evSkip p1, evSkip p2 => pmap evSkip propPath
@@ -557,7 +557,7 @@
               | vs1=vs2 : vs1 = {Array Var n} vs2 => =-n vs1 vs2 vs1=vs2'
               | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => in~ nil }
               | q => path $ \lam i => (xs1=xs2 i, sc1m1=sc2m2 i, f1=f2 i, vs1=vs2 i, cl1=cl2 i)
-              | ev1' => transport (\lam (xs', (sc, m), f', vs, cl') => Eval (Scope.args vs xs', m) cl' f' _ _) q ev1
+              | ev1' => transport (\lam (xs', (sc, m), f', vs, cl') => Eval (Telescope.zip vs xs', m) cl' f' _ _) q ev1
         \in functionality ev1' ev2
 
       | st, eSubscript e1 e2, x1, x2, (sc1, m1), (sc2, m2), evSubscript {l1} {st1} {i1} {bv1} p1 q1 g1 g1',
@@ -585,7 +585,7 @@
       | (sc, m), eString s, vLoc l1, vLoc l2, (sc1, m1), (sc2, m2), evString idp p idp, evString idp q idp =>
         \have l1=l2 => Memory.NextLoc.functionality p q \in rewrite l1=l2 (idp, idp)
 
-      | (sc, m), eFun vs e, vLoc l1, vLoc l2, (sc1, m1), (sc2, m2), evFun idp p idp, evFun idp q idp =>
+      | (sc, m), eFun {n} vs e, vLoc l1, vLoc l2, (sc1, m1), (sc2, m2), evFun idp p idp, evFun idp q idp =>
         \have l1=l2 => Memory.NextLoc.functionality p q \in rewrite l1=l2 (idp, idp)
 
       | st, eSkip, vInt 0, vInt 0, st1, st2, evSkip idp, evSkip idp => (idp, idp)
@@ -733,8 +733,8 @@
 
 \data EvalDef (st : State) (cl : Scope) (d : Def) (st' : State) : \Set \elim st, d, st'
   | st, dVar v e, (sc', m) => edVar {x : Value} {sc : Scope} (Eval st cl e x (sc, m)) (sc' = Telescope.set v x sc)
-  | (sc, m), dFun v vs e, (sc', m') => edFun {l : Loc} (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
-                                             (Memory.NextLoc m l) (sc' = Telescope.set v (vLoc l) sc)
+  | (sc, m), dFun v {n} vs e, (sc', m') => edFun {l : Loc} (Memory.NextLoc m l) (sc' = Telescope.set v (vLoc l) sc)
+                                                 (m' = Telescope.set l (bvFun e vs (Telescope.concat sc cl)) m)
   \where {
 
     \use \level levelProp {st : State} {cl : Scope} {d : Def} {st' : State} : isProp (EvalDef st cl d st') => levelProp'
@@ -747,12 +747,12 @@
           = edVar {_} {_} {_} {_} {_} {_} {x} {sc} a b)
             p (\lam a b => pmap2 edVar (Eval.levelProp' p1 a) propPath) p2 q2
 
-      | (sc, m), dFun v vs e, (sc', m'), edFun {l1} p1 n1 q1, edFun {l2} p2 n2 q2 =>
-        \have | pl' => Telescope.set.inj $ inv q1 *> q2
+      | (sc, m), dFun v {n} vs e, (sc', m'), edFun {l1} n1 p1 q1, edFun {l2} n2 p2 q2 =>
+        \have | pl' => Telescope.set.inj $ inv p1 *> p2
               | pl : l1 = l2 => path $ \case pl' __ \with { | vLoc l => l | _ => 0 }
-        \in transport (\lam l => \Pi (a : _) (b : _) (c : _) -> edFun p1 n1 q1
-          = edFun {_} {_} {_} {_} {_} {_} {_} {_} {l} a b c)
-            pl (\lam a b c => path $ \lam i => edFun (propPath i) (propPath i) (propPath i)) p2 n2 q2
+        \in transport (\lam l => \Pi (a : _) (b : _) (c : _) -> edFun n1 p1 q1
+          = edFun {_} {_} {_} {_} {_} {_} {_} {_} {_} {l} a b c)
+            pl (\lam a b c => path $ \lam i => edFun (propPath i) (propPath i) (propPath i)) n2 p2 q2
 
     \lemma functionality {st : State} {cl : Scope} {d : Def} {st1 st2 : State}
                          (p : EvalDef st cl d st1) (q : EvalDef st cl d st2)
@@ -762,10 +762,10 @@
               | q : sc1' = sc2' => transport (\lam (x, (sc, _)) => sc1' = Telescope.set v x sc) p q1 *> inv q2
         \in ext (q, path $ \lam i => (p i).2.2)
 
-      | (sc, m), dFun v vs e, (sc1', m1'), (sc2', m2'), edFun {l1} p1 n1 q1, edFun {l2} p2 n2 q2 =>
+      | (sc, m), dFun v vs e, (sc1', m1'), (sc2', m2'), edFun {l1} n1 p1 q1, edFun {l2} n2 p2 q2 =>
         \have | pl : l1 = l2 => Memory.NextLoc.functionality n1 n2
-              | p => path $ \lam i => (q1 i, p1 i)
-              | q => path $ \lam i => (q2 i, p2 i)
+              | p => path $ \lam i => (p1 i, q1 i)
+              | q => path $ \lam i => (p2 i, q2 i)
         \in transport (\lam l => (sc1', m1') = (Telescope.set v (vLoc l) sc, Telescope.set l _ _)) pl p *> inv q
   }
 

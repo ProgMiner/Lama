@@ -158,6 +158,10 @@
             \in Get'.functionality p1 p2
       }
 
+    \func zip {K : DecSet} {V : \Set} {n : Nat} (ks : Array K n) (vs : Array V n) : Telescope K V \elim n, ks, vs
+      | 0, nil, nil => in~ nil
+      | suc n, v :: vs, x :: xs => set v x $ zip vs xs
+
     \func concat {K : DecSet} {V : \Set} (sc1 sc2 : Telescope K V) : Telescope K V \elim sc2
       | in~ sc2 => concat' sc1 sc2
       | ~-equiv sc2 sc2' r => cases sc1 \with {

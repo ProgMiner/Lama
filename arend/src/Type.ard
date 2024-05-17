@@ -1,0 +1,92 @@
+\import Arith.Nat
+\import Expr
+\import Function.Meta ($)
+\import Nub
+\import Relation.Equivalence
+\import Set
+
+\func TVar => Nat
+\func TVar* => Nub (NatSemiring : DecSet TVar)
+
+\data Type : \Set
+  | tVar TVar
+  | tInt
+  | tString
+  | tArray Type
+  | tSexp {n : Nat} (Array (\Sigma (l : Label) (n : Nat) (Array Type n)) n)
+  | tFun {m : Nat} (Array TVar m) Constraint {n : Nat} (Array Type n) Type
+  | tMu TVar Type
+  \where {
+
+    \func Sexp : \Set => \Sigma (l : Label) (n : Nat) (Array Type n)
+      \where {
+
+        \func fv (xts : Sexp) : TVar* \elim xts
+          | (_, n, ts) => Type.fv* ts
+
+        \func fv* {n : Nat} (xs : Array Sexp n) : TVar* \elim n, xs
+          | 0, nil => in~ nil
+          | suc n, xts :: xs => fv xts Nub.`union` fv* xs
+      }
+
+    \func fv (t : Type) : TVar* \elim t
+      | tVar t => in~ ((t, ()) :: nil)
+      | tInt => in~ nil
+      | tString => in~ nil
+      | tArray t => fv t
+      | tSexp xs => Sexp.fv* xs
+      | tFun xs c ts t => Nub.remove* xs $ Constraint.fv c Nub.`union` fv* ts Nub.`union` fv t
+      | tMu x t => Nub.remove x (fv t)
+
+    \func fv* {n : Nat} (ts : Array Type n) : TVar* \elim n, ts
+      | 0, nil => in~ nil
+      | suc n, t :: ts => fv t Nub.`union` fv* ts
+  }
+
+\data Constraint : \Set
+  | cTop
+  | cAnd Constraint Constraint
+  | cInd Type Type
+  | cCall Type {n : Nat} (Array Type n) Type
+  | cMatch Type {n : Nat} (Array TPattern n)
+  | cSexp Label Type {n : Nat} (Array Type n)
+  \where {
+
+    \func fv (c : Constraint) : TVar* \elim c
+      | cTop => in~ nil
+      | cAnd c1 c2 => fv c1 Nub.`union` fv c2
+      | cInd t1 t2 => Type.fv t1 Nub.`union` Type.fv t2
+      | cCall t ts t' => Type.fv t Nub.`union` Type.fv* ts Nub.`union` Type.fv t'
+      | cMatch t ps => Type.fv t Nub.`union` TPattern.fv* ps
+      | cSexp _ t ts => Type.fv t Nub.`union` Type.fv* ts
+  }
+
+\data TPattern : \Set
+  | tpWildcard
+  | tpTyped Type TPattern
+  | tpArray {n : Nat} (Array TPattern n)
+  | tpSexp Label {n : Nat} (Array TPattern n)
+  | tpBoxed
+  | tpUnboxed
+  | tpStringShape
+  | tpArrayShape
+  | tpSexpShape
+  | tpFunShape
+  \where {
+
+    \func fv (p : TPattern) : TVar* \elim p
+      | tpWildcard => in~ nil
+      | tpTyped t p => Type.fv t Nub.`union` fv p
+      | tpArray {n} ps => fv* ps
+      | tpSexp _ ps => fv* ps
+      | tpBoxed => in~ nil
+      | tpUnboxed => in~ nil
+      | tpStringShape => in~ nil
+      | tpArrayShape => in~ nil
+      | tpSexpShape => in~ nil
+      | tpFunShape => in~ nil
+
+    \func fv* {n : Nat} (ps : Array TPattern n) : TVar* \elim n, ps
+      | 0, nil => in~ nil
+      | suc n, p :: ps => fv p Nub.`union` fv* ps
+  }
