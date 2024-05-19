@@ -166,7 +166,7 @@
       | vLoc l, pFunShape, nil, mFunShape {e1} {xs1} {cl1} g1, mFunShape {e2} {xs2} {cl2} g2 =>
         \have | p => Telescope.Get.functionality g1 g2
               | p' => path $ \case p __ \return \Sigma Expr (Array Var) Scope
-                             \with { | bvFun e xs cl => (e, xs, cl) | _ => (eSkip, nil, in~ nil) }
+                             \with { | bvFun e xs cl => (e, xs, cl) | _ => (eSkip, nil, Telescope.empty) }
         \in transport (\lam (e, xs, cl) => \Pi (a : _) -> mFunShape g1 = mFunShape {_} {_} {e} {xs} {cl} a)
             p' (\lam a => pmap mFunShape propPath) g2
 
@@ -355,7 +355,7 @@
               | vs1=vs2' : vs1 = {Array Var} vs2 => path
                 $ \case f1vs1cl1=f2vs2cl2 __  \with { | bvFun _ vs _ => vs | _ => nil }
               | vs1=vs2 : vs1 = {Array Var n} vs2 => =-n vs1 vs2 vs1=vs2'
-              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => in~ nil }
+              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => Telescope.empty }
               | q => path $ \lam i => (l1=l2 i, f1=f2 i, st1=st2 i, xs1=xs2 i, vs1=vs2 i, sc1=sc2 i, cl1=cl2 i, m1=m2 i)
         \in transport (\lam (l, f', st', xs', vs, sc, cl', m) => \Pi (a : _) (b : _) (c : _) (d : _)
         -> evCall p1 q1 g1 ev1 = evCall {_} {_} {_} {_} {_} {_} {_} {l} {f'} {st'} {xs'} {vs} {sc} {cl'} {m} a b c d)
@@ -555,7 +555,7 @@
               | vs1=vs2' : vs1 = {Array Var} vs2 => path
                 $ \case f1vs1cl1=f2vs2cl2 __  \with { | bvFun _ vs _ => vs | _ => nil }
               | vs1=vs2 : vs1 = {Array Var n} vs2 => =-n vs1 vs2 vs1=vs2'
-              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => in~ nil }
+              | cl1=cl2 => path $ \case f1vs1cl1=f2vs2cl2 __ \with { | bvFun _ _ cl => cl | _ => Telescope.empty }
               | q => path $ \lam i => (xs1=xs2 i, sc1m1=sc2m2 i, f1=f2 i, vs1=vs2 i, cl1=cl2 i)
               | ev1' => transport (\lam (xs', (sc, m), f', vs, cl') => Eval (Telescope.zip vs xs', m) cl' f' _ _) q ev1
         \in functionality ev1' ev2
@@ -698,7 +698,7 @@
       | 0, nil, nil, nil, st1, st2, ev*Nil p1, ev*Nil p2 => (idp {Array Value 0}, inv p1 *> p2)
       | suc n, e :: es, x1 :: xs1, x2 :: xs2, st1, st2, ev*Cons {st1'} p1 q1, ev*Cons {st2'} p2 q2 =>
         \have | (px, pst) => Eval.functionality p1 p2
-              | (qxs, qst) => functionality q1 $ rewriteF (inv pst) q2
+              | (qxs, qst) => functionality (rewriteF pst q1) q2
         \in (pmap2 {Value} {Array Value n} {Array Value (suc n)} (::) px qxs, qst)
   }
 

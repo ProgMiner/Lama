@@ -1,5 +1,6 @@
 \import Data.Array
 \import Data.Bool
+\import Data.Maybe
 \import Data.Or
 \import Equiv
 \import Function
@@ -139,6 +140,27 @@
           | in~ sc, p, p' => Get'.functionality p p'
       }
 
+    \func find {K : DecSet} {V : \Set} (k : K) (sc : Telescope K V) : Maybe V \elim sc
+      | in~ sc => \case Get'.Get'Dec.find k sc \with {
+        | yes e => \case Get'.functionality'.find e \with {
+          | (v, _) => just v
+        }
+        | no _ => nothing
+      }
+      | ~-equiv sc1 sc2 r => cases (Get'.Get'Dec.find k sc1, Get'.Get'Dec.find k sc2) \with {
+        | yes (inP p1), yes (inP p2) =>
+          \have | q1 => Get'.functionality'.ret_f p1
+                | q1' => path $ \lam i => (q1 i).1
+                | q2 => Get'.functionality'.ret_f p2
+                | q2' => path $ \lam i => (q2 i).1
+                | q => Get'.functionality ((r k p1.1).1 p1.2) p2.2
+          \in pmap just $ q1' *> q *> inv q2'
+
+        | yes (inP (v, p)), no n => \case n $ inP (v, (r k v).1 p)
+        | no n, yes (inP (v, p)) => \case n $ inP (v, (r k v).2 p)
+        | no _, no _ => idp
+      }
+
     \func set {K : DecSet} {V : \Set} (k : K) (v : V) (sc : Telescope K V) : Telescope K V \elim sc
       | in~ sc => in~ $ (k, v) :: sc
       | ~-equiv sc1 sc2 r => path $ ~-equiv _ _ $ \lam k' v' => (set-=> k' v' r, set-=> k' v' $ R.REq.~-symmetric r)
@@ -159,7 +181,7 @@
       }
 
     \func zip {K : DecSet} {V : \Set} {n : Nat} (ks : Array K n) (vs : Array V n) : Telescope K V \elim n, ks, vs
-      | 0, nil, nil => in~ nil
+      | 0, nil, nil => empty
       | suc n, v :: vs, x :: xs => set v x $ zip vs xs
 
     \func concat {K : DecSet} {V : \Set} (sc1 sc2 : Telescope K V) : Telescope K V \elim sc2
@@ -243,4 +265,6 @@
     \func erase {K : DecSet} {V : \Set} (ks : Array K) (sc : Telescope K V) : Telescope K V \elim ks
       | nil => sc
       | k :: ks => unset k $ erase ks sc
+
+    \func empty {K : DecSet} {V : \Set} : Telescope K V => in~ nil
   }

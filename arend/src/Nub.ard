@@ -1,5 +1,7 @@
-\import Data.Array
-\import Relation.Equivalence
+\import Data.Bool
+\import Data.Maybe
+\import Function.Meta ($)
+\import Logic
 \import Set
 \import Telescope
 
@@ -12,11 +14,22 @@
 
     \func In {K : DecSet} (n : Nub K) (k : K) : \Prop => Get n k ()
 
+    \func Disjoint {K : DecSet} (n1 n2 : Nub K) : \Prop => \Pi (k : K) -> Not (\Sigma (In n1 k) (In n2 k))
+
     \func add {K : DecSet} (k : K) (n : Nub K) : Nub K => set k () n
+
+    \func add* {K : DecSet} (ks : Array K) (n : Nub K) : Nub K \elim ks
+      | nil => n
+      | k :: ks => add k $ add* ks n
 
     \func union {K : DecSet} (n1 n2 : Nub K) : Nub K => concat n1 n2
 
     \func remove {K : DecSet} (k : K) (n : Nub K) : Nub K => unset k n
 
     \func remove* {K : DecSet} (ks : Array K) (n : Nub K) : Nub K => erase ks n
+
+    \func empty {K : DecSet} : Nub K => Telescope.empty
+
+    \func contains {K : DecSet} (k : K) (n : Nub K) : Bool
+      => \case Telescope.find k n \with { | nothing => false | just _ => true }
   }

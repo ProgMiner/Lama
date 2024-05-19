@@ -1,0 +1,197 @@
+\import Arith.Nat
+\import Function.Meta ($)
+\import Logic
+\import Nub
+\import Paths
+\import Set
+\import Telescope
+\import Type
+
+\type Subst => Telescope (NatSemiring : DecSet TVar) Type
+
+\data SubstV (bvs : TVar*) (s : Subst) (v : TVar) (t : Type) : \Set \elim t
+  | t => svNew (Not (Nub.In bvs v)) (Nub.Disjoint bvs (Type.fv t))
+               (Telescope.Get {NatSemiring : DecSet TVar} {Type} s v t)
+  | tVar v' => svBV {t : Type} (v = v') (Nub.In bvs v) (Telescope.Get {NatSemiring : DecSet TVar} {Type} s v t)
+  | tVar v' => svOld (v = v') (\Pi (t : Type) -> Not (Telescope.Get s v t))
+  \where {
+
+    \use \level levelProp {bvs : TVar*} {s : Subst} {v : TVar} {t : Type} (p q : SubstV bvs s v t)
+      : p = q \elim t, p, q
+      | t, svNew n1 p1 q1, svNew n2 p2 q2 => path $ \lam i => svNew (propPath i) (propPath i) (propPath i)
+      | tVar v', svNew n _ _, svBV _ p _ => \case n p
+      | tVar v', svNew _ _ p, svOld _ n => \case n (tVar v') p
+      | tVar v', svBV _ p _, svNew n _ _ => \case n p
+      | tVar v', svBV {t1} p1 q1 g1, svBV {t2} p2 q2 g2 =>
+        \have t1=t2 => Telescope.Get.functionality g1 g2
+        \in transport (\lam t => \Pi (a : _) (b : _) (c : _) -> svBV p1 q1 g1 = svBV {_} {_} {_} {_} {t} a b c)
+            t1=t2 (\lam a b c => path $ \lam i => svBV (propPath i) (propPath i) (propPath i)) p2 q2 g2
+
+      | tVar v', svBV {t} _ _ p, svOld _ n => \case n t p
+      | tVar v', svOld _ n, svNew _ _ p => \case n (tVar v') p
+      | tVar v', svOld _ n, svBV {t} _ _ p => \case n t p
+      | tVar v', svOld p1 n1, svOld p2 n2 => pmap2 svOld propPath propPath
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {v : TVar} {t1 t2 : Type}
+                         (p : SubstV bvs s v t1) (q : SubstV bvs s v t2)
+      : t1 = t2 \elim t1, t2, p, q
+      | t1, t2, svNew _ _ p, svNew _ _ q => Telescope.Get.functionality p q
+      | t, tVar v', svNew n _ _, svBV _ p _ => \case n p
+      | t, tVar v', svNew _ _ p, svOld _ n => \case n t p
+      | tVar v', t, svBV _ p _, svNew n _ _ => \case n p
+      | tVar v1, tVar v2, svBV idp _ _, svBV idp _ _ => idp
+      | tVar v1, tVar v2, svBV {t} _ _ p, svOld _ n => \case n t p
+      | tVar v', t, svOld _ n, svNew _ _ p => \case n t p
+      | tVar v1, tVar v2, svOld _ n, svBV {t} _ _ p => \case n t p
+      | tVar v1, tVar v2, svOld idp _, svOld idp _ => idp
+  }
+
+\data SubstT (bvs : TVar*) (s : Subst) (t t' : Type) : \Prop \elim t, t'
+  | tVar v, t' => stVar (SubstV bvs s v t')
+  | tInt, tInt => stInt
+  | tString, tString => stString
+  | tArray t, tArray t' => stArray (SubstT bvs s t t')
+  | tSexp {n} xs, tSexp {n'} xs' => stSexp (p : n = n') (SubstSexp* bvs s (transport (Array Type.Sexp __) p xs) xs')
+  | tFun {m} xs c {n} ts t, tFun {m'} xs' c' {n'} ts' t' => stFun (p : m = m') (q : n = n')
+                                                                  (transport (Array TVar __) p xs = {Array TVar m'} xs')
+                                                                  (SubstC (Nub.add* xs bvs) s c c')
+                                                                  (SubstT* (Nub.add* xs bvs) s
+                                                                      (transport (Array Type __) q ts) ts')
+                                                                  (SubstT (Nub.add* xs bvs) s t t')
+  | tMu x t, tMu x' t' => stMu (x = x') (SubstT (Nub.add x bvs) s t t')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {t t1 t2 : Type} (p : SubstT bvs s t t1) (q : SubstT bvs s t t2)
+      : t1 = t2 \elim t, t1, t2, p, q
+      | tVar v, t1, t2, stVar p, stVar q => SubstV.functionality p q
+      | tInt, tInt, tInt, stInt, stInt => idp
+      | tString, tString, tString, stString, stString => idp
+      | tArray t1, tArray t2, tArray t3, stArray p, stArray q => pmap tArray $ functionality p q
+      | tSexp {n} xs, tSexp {n1} xs1, tSexp {n2} xs2, stSexp idp p, stSexp idp q =>
+        pmap tSexp (SubstSexp*.functionality p q)
+
+      | tFun {m} xs c {n} ts t, tFun {m1} xs1 c1 {n1} ts1 t1, tFun {m2} xs2 c2 {n2} ts2 t2,
+      stFun idp idp idp sc1 p1 q1, stFun idp idp idp sc2 p2 q2 =>
+        path $ \lam i => tFun xs (SubstC.functionality sc1 sc2 i) (SubstT*.functionality p1 p2 i)
+            (functionality q1 q2 i)
+
+      | tMu x t, tMu x1 t1, tMu x2 t2, stMu idp p, stMu idp q => pmap (tMu x) $ functionality p q
+  }
+
+\data SubstT* (bvs : TVar*) (s : Subst) {n : Nat} (ts ts' : Array Type n) : \Prop \elim n, ts, ts'
+  | 0, nil, nil => st*Nil
+  | suc n, t :: ts, t' :: ts' => st*Cons (SubstT bvs s t t') (SubstT* bvs s ts ts')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {n : Nat} {ts ts1 ts2 : Array Type n}
+                         (p : SubstT* bvs s ts ts1) (q : SubstT* bvs s ts ts2)
+      : ts1 = {Array Type n} ts2 \elim n, ts, ts1, ts2, p, q
+      | 0, nil, nil, nil, st*Nil, st*Nil => idp {Array Type 0}
+      | suc n, t :: ts, t1 :: ts1, t2 :: ts2, st*Cons p1 q1, st*Cons p2 q2 =>
+        pmap2 {_} {_} {Array Type (suc n)} (::) (SubstT.functionality p1 p2) (functionality q1 q2)
+  }
+
+\data SubstSexp (bvs : TVar*) (s : Subst) (xts xts' : Type.Sexp) : \Prop \elim xts, xts'
+  | (lb, n, ts), (lb', n', ts') => sSexp (lb = lb') (p : n = n') (SubstT* bvs s (transport (Array Type __) p ts) ts')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {xts xts1 xts2 : Type.Sexp}
+                         (p : SubstSexp bvs s xts xts1) (q : SubstSexp bvs s xts xts2)
+      : xts1 = xts2 \elim xts, xts1, xts2, p, q
+      | (lb, n, ts), (lb1, n1, ts1), (lb2, n2, ts2), sSexp idp idp p, sSexp idp idp q =>
+        \have ts1=ts2 => SubstT*.functionality p q \in path $ \lam i => (lb, n, ts1=ts2 i)
+  }
+
+\data SubstSexp* (bvs : TVar*) (s : Subst) {n : Nat} (xs xs' : Array Type.Sexp n) : \Prop \elim n, xs, xs'
+  | 0, nil, nil => sSexp*Nil
+  | suc n, xts :: xs, xts' :: xs' => sSexp*Cons (SubstSexp bvs s xts xts') (SubstSexp* bvs s xs xs')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {n : Nat} {xs xs1 xs2 : Array Type.Sexp n}
+                         (p : SubstSexp* bvs s xs xs1) (q : SubstSexp* bvs s xs xs2)
+      : xs1 = {Array Type.Sexp n} xs2 \elim n, xs, xs1, xs2, p, q
+      | 0, nil, nil, nil, sSexp*Nil, sSexp*Nil => idp {Array Type.Sexp 0}
+      | suc n, xts :: xs, xts1 :: xs1, xts2 :: xs2, sSexp*Cons p1 q1, sSexp*Cons p2 q2 =>
+        pmap2 {_} {_} {Array Type.Sexp (suc n)} (::) (SubstSexp.functionality p1 p2) (functionality q1 q2)
+  }
+
+\data SubstC (bvs : TVar*) (s : Subst) (c c' : Constraint) : \Prop \elim c, c'
+  | cTop, cTop => scTop
+  | cAnd c1 c2, cAnd c1' c2' => scAnd (SubstC bvs s c1 c1') (SubstC bvs s c2 c2')
+  | cInd t1 t2, cInd t1' t2' => scInd (SubstT bvs s t1 t1') (SubstT bvs s t2 t2')
+  | cCall f {n} ts t, cCall f' {n'} ts' t' => scCall (p : n = n') (SubstT bvs s f f') (SubstT bvs s t t')
+                                                     (SubstT* bvs s (transport (Array Type __) p ts) ts')
+  | cMatch t {n} ps, cMatch t' {n'} ps' => scMatch (p : n = n') (SubstT bvs s t t')
+                                                   (SubstP* bvs s (transport (Array TPattern __) p ps) ps')
+  | cSexp lb t {n} ts, cSexp lb' t' {n'} ts' => scSexp (lb = lb') (p : n = n') (SubstT bvs s t t')
+                                                       (SubstT* bvs s (transport (Array Type __) p ts) ts')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {c c1 c2 : Constraint}
+                         (p : SubstC bvs s c c1) (q : SubstC bvs s c c2)
+      : c1 = c2 \elim c, c1, c2, p, q
+      | cTop, cTop, cTop, scTop, scTop => idp
+      | cAnd c1 c2, cAnd c11 c12, cAnd c21 c22, scAnd p1 q1, scAnd p2 q2 =>
+        pmap2 cAnd (functionality p1 p2) (functionality q1 q2)
+
+      | cInd t1 t2, cInd t11 t12, cInd t21 t22, scInd p1 q1, scInd p2 q2 =>
+        pmap2 cInd (SubstT.functionality p1 p2) (SubstT.functionality q1 q2)
+
+      | cCall f {n} ts t, cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2, scCall idp p1 q1 s1, scCall idp p2 q2 s2 =>
+        path $ \lam i => cCall (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality s1 s2 i)
+            (SubstT.functionality q1 q2 i)
+
+      | cMatch t {n} ps, cMatch t1 {n1} ps1, cMatch t2 {n2} ps2, scMatch idp p1 q1, scMatch idp p2 q2 =>
+        pmap2 {_} {Array TPattern n} (cMatch __ {n} __) (SubstT.functionality p1 p2) (SubstP*.functionality q1 q2)
+
+      | cSexp lb t {n} ts, cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2, scSexp idp idp p1 q1, scSexp idp idp p2 q2 =>
+        path $ \lam i => cSexp lb (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality q1 q2 i)
+  }
+
+\data SubstP (bvs : TVar*) (s : Subst) (p p' : TPattern) : \Prop \elim p, p'
+  | tpWildcard, tpWildcard => spWildcard
+  | tpTyped t p, tpTyped t' p' => spTyped (SubstT bvs s t t') (SubstP bvs s p p')
+  | tpArray {n} ps, tpArray {n'} ps' => spArray (p : n = n') (SubstP* bvs s (transport (Array TPattern __) p ps) ps')
+  | tpSexp lb {n} ps, tpSexp lb' {n'} ps' => spSexp (lb = lb') (p : n = n')
+                                                    (SubstP* bvs s (transport (Array TPattern __) p ps) ps')
+  | tpBoxed, tpBoxed => spBoxed
+  | tpUnboxed, tpUnboxed => spUnboxed
+  | tpStringShape, tpStringShape => spStringShape
+  | tpArrayShape, tpArrayShape => spArrayShape
+  | tpSexpShape, tpSexpShape => spSexpShape
+  | tpFunShape, tpFunShape => spFunShape
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {pat p1 p2 : TPattern}
+                         (p : SubstP bvs s pat p1) (q : SubstP bvs s pat p2)
+      : p1 = p2 \elim pat, p1, p2, p, q
+      | tpWildcard, tpWildcard, tpWildcard, spWildcard, spWildcard => idp
+      | tpTyped t pat, tpTyped t1 pat1, tpTyped t2 pat2, spTyped p1 q1, spTyped p2 q2 =>
+        pmap2 tpTyped (SubstT.functionality p1 p2) (functionality q1 q2)
+
+      | tpArray {n} ps, tpArray {n1} ps1, tpArray {n2} ps2, spArray idp p, spArray idp q =>
+        pmap tpArray (SubstP*.functionality p q)
+
+      | tpSexp lb {n} ps, tpSexp lb1 {n1} ps1, tpSexp lb2 {n2} ps2, spSexp idp idp p, spSexp idp idp q =>
+        pmap (tpSexp lb) (SubstP*.functionality p q)
+
+      | tpBoxed, tpBoxed, tpBoxed, spBoxed, spBoxed => idp
+      | tpUnboxed, tpUnboxed, tpUnboxed, spUnboxed, spUnboxed => idp
+      | tpStringShape, tpStringShape, tpStringShape, spStringShape, spStringShape => idp
+      | tpArrayShape, tpArrayShape, tpArrayShape, spArrayShape, spArrayShape => idp
+      | tpSexpShape, tpSexpShape, tpSexpShape, spSexpShape, spSexpShape => idp
+      | tpFunShape, tpFunShape, tpFunShape, spFunShape, spFunShape => idp
+  }
+
+\data SubstP* (bvs : TVar*) (s : Subst) {n : Nat} (ps ps' : Array TPattern n) : \Prop \elim n, ps, ps'
+  | 0, nil, nil => tp*Nil
+  | suc n, p :: ps, p' :: ps' => tp*Cons (SubstP bvs s p p') (SubstP* bvs s ps ps')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {n : Nat} {ps ps1 ps2 : Array TPattern n}
+                         (p : SubstP* bvs s ps ps1) (q : SubstP* bvs s ps ps2)
+      : ps1 = {Array TPattern n} ps2 \elim n, ps, ps1, ps2, p, q
+      | 0, nil, nil, nil, tp*Nil, tp*Nil => idp {Array TPattern 0}
+      | suc n, p :: ps, pat1 :: ps1, pat2 :: ps2, tp*Cons p1 q1, tp*Cons p2 q2 =>
+        pmap2 {_} {_} {Array TPattern (suc n)} (::) (SubstP.functionality p1 p2) (functionality q1 q2)
+  }

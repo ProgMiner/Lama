@@ -20,6 +20,7 @@
       <ArendPrintingOptions>
         <option name="showConstructorParameters" value="true" />
         <option name="showLocalFieldInstance" value="false" />
+        <option name="showProofs" value="true" />
       </ArendPrintingOptions>
     </option>
     <option name="librariesRoot" value="$USER_HOME$/.arend/libs" />

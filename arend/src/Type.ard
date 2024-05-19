@@ -2,13 +2,12 @@
 \import Expr
 \import Function.Meta ($)
 \import Nub
-\import Relation.Equivalence
 \import Set
 
 \func TVar => Nat
 \func TVar* => Nub (NatSemiring : DecSet TVar)
 
-\data Type : \Set
+\data Type : \Set0
   | tVar TVar
   | tInt
   | tString
@@ -25,25 +24,25 @@
           | (_, n, ts) => Type.fv* ts
 
         \func fv* {n : Nat} (xs : Array Sexp n) : TVar* \elim n, xs
-          | 0, nil => in~ nil
+          | 0, nil => Nub.empty
           | suc n, xts :: xs => fv xts Nub.`union` fv* xs
       }
 
     \func fv (t : Type) : TVar* \elim t
-      | tVar t => in~ ((t, ()) :: nil)
-      | tInt => in~ nil
-      | tString => in~ nil
+      | tVar t => Nub.add t $ Nub.empty
+      | tInt => Nub.empty
+      | tString => Nub.empty
       | tArray t => fv t
       | tSexp xs => Sexp.fv* xs
       | tFun xs c ts t => Nub.remove* xs $ Constraint.fv c Nub.`union` fv* ts Nub.`union` fv t
       | tMu x t => Nub.remove x (fv t)
 
     \func fv* {n : Nat} (ts : Array Type n) : TVar* \elim n, ts
-      | 0, nil => in~ nil
+      | 0, nil => Nub.empty
       | suc n, t :: ts => fv t Nub.`union` fv* ts
   }
 
-\data Constraint : \Set
+\data Constraint : \Set0
   | cTop
   | cAnd Constraint Constraint
   | cInd Type Type
@@ -53,7 +52,7 @@
   \where {
 
     \func fv (c : Constraint) : TVar* \elim c
-      | cTop => in~ nil
+      | cTop => Nub.empty
       | cAnd c1 c2 => fv c1 Nub.`union` fv c2
       | cInd t1 t2 => Type.fv t1 Nub.`union` Type.fv t2
       | cCall t ts t' => Type.fv t Nub.`union` Type.fv* ts Nub.`union` Type.fv t'
@@ -61,7 +60,7 @@
       | cSexp _ t ts => Type.fv t Nub.`union` Type.fv* ts
   }
 
-\data TPattern : \Set
+\data TPattern : \Set0
   | tpWildcard
   | tpTyped Type TPattern
   | tpArray {n : Nat} (Array TPattern n)
@@ -75,18 +74,18 @@
   \where {
 
     \func fv (p : TPattern) : TVar* \elim p
-      | tpWildcard => in~ nil
+      | tpWildcard => Nub.empty
       | tpTyped t p => Type.fv t Nub.`union` fv p
       | tpArray {n} ps => fv* ps
       | tpSexp _ ps => fv* ps
-      | tpBoxed => in~ nil
-      | tpUnboxed => in~ nil
-      | tpStringShape => in~ nil
-      | tpArrayShape => in~ nil
-      | tpSexpShape => in~ nil
-      | tpFunShape => in~ nil
+      | tpBoxed => Nub.empty
+      | tpUnboxed => Nub.empty
+      | tpStringShape => Nub.empty
+      | tpArrayShape => Nub.empty
+      | tpSexpShape => Nub.empty
+      | tpFunShape => Nub.empty
 
     \func fv* {n : Nat} (ps : Array TPattern n) : TVar* \elim n, ps
-      | 0, nil => in~ nil
+      | 0, nil => Nub.empty
       | suc n, p :: ps => fv p Nub.`union` fv* ps
   }

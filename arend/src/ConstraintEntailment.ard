@@ -1,4 +1,16 @@
 \import Type
 
 -- TODO
-\data Ent (c c' : Constraint) : \Set
+\data Ent (c c' : Constraint) \elim c, c'
+  | c, c' => ceRefl (c = c')
+  | _, cTop => ceTop
+  | c, cAnd c1 c2 => ceAnd (Ent c c1) (Ent c c2)
+  | cAnd c1 c2, c' => ceAndL (Ent c1 c')
+  | cAnd c1 c2, c' => ceAndR (Ent c2 c')
+  | _, cInd tString tInt => ceIndString
+  | _, cInd (tArray t) t' => ceIndArray (t = t')
+  | _, cInd (tSexp {n} xs) t' => ceIndSexp (\Pi (i : Fin n) (j : Fin (xs i).2) -> (xs i).3 j = t')
+  -- | _, cCall f {n} ts t => ceCall () TODO subst
+  -- TODO matchT*
+  | _, cSexp lb (tSexp {n} xs) {m} ts => ceSexp {i : Fin n} ((xs i).1 = lb) ((xs i).2 = m)
+                                                (\Pi (i : Fin n) -> ((xs i).1 = lb) -> ((xs i).2 = m) -> (xs i).3 = ts)
