@@ -1,16 +1,27 @@
+\import Nub
+\import Paths
+\import Subst
 \import Type
+\import TypeEquality
 
--- TODO
-\data Ent (c c' : Constraint) \elim c, c'
-  | c, c' => ceRefl (c = c')
+\data \infix 1 ||- (c1 c2 : Constraint) : \Set
+  | ceCoerce {c1' c2' : Constraint} (c1 =c= c1') (c2 =c= c2') (c1' ||-' c2')
+
+\data \infix 1 ||-' (c c' : Constraint) : \Set \elim c, c'
+  | c, c' => ceRefl (c =c= c')
   | _, cTop => ceTop
-  | c, cAnd c1 c2 => ceAnd (Ent c c1) (Ent c c2)
-  | cAnd c1 c2, c' => ceAndL (Ent c1 c')
-  | cAnd c1 c2, c' => ceAndR (Ent c2 c')
+  | c, cAnd c1 c2 => ceAnd (c ||- c1) (c ||- c2)
+  | cAnd c1 c2, c' => ceAndL (c1 ||- c')
+  | cAnd c1 c2, c' => ceAndR (c2 ||- c')
   | _, cInd tString tInt => ceIndString
-  | _, cInd (tArray t) t' => ceIndArray (t = t')
-  | _, cInd (tSexp {n} xs) t' => ceIndSexp (\Pi (i : Fin n) (j : Fin (xs i).2) -> (xs i).3 j = t')
-  -- | _, cCall f {n} ts t => ceCall () TODO subst
+  | _, cInd (tArray t) t' => ceIndArray (t =t= t')
+  | _, cInd (tSexp {n} xs) t' => ceIndSexp (\Pi (i : Fin n) (j : Fin (xs i).2) -> (xs i).3 j =t= t')
+  | c, cCall (tFun {m} xs c' {n} ts t) {n'} ts' t' => ceCall {s : Subst} (p : n = n')
+                                                             {sc : Constraint} (SubstC Nub.empty s c' sc) (c ||- sc)
+                                                             {sts : Array Type n} (SubstT* Nub.empty s ts sts)
+                                                             (transport _ p sts =t*= ts')
+                                                             {st : Type} (SubstT Nub.empty s t st) (st =t= t')
   -- TODO matchT*
   | _, cSexp lb (tSexp {n} xs) {m} ts => ceSexp {i : Fin n} ((xs i).1 = lb) ((xs i).2 = m)
-                                                (\Pi (i : Fin n) -> ((xs i).1 = lb) -> ((xs i).2 = m) -> (xs i).3 = ts)
+                                                (\Pi {j : Fin n} (p : (xs j).2 = m) -> ((xs j).1 = lb)
+                                                -> transport _ p (xs j).3 =t*= ts)

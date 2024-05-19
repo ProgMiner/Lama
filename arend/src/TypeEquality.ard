@@ -1,0 +1,199 @@
+\import Function.Meta
+\import HLevel
+\import Logic
+\import Nub
+\import Paths
+\import Subst
+\import Telescope
+\import Type
+
+\data \infix 1 =t= (t1 t2 : Type) : \Set \elim t1, t2
+  | tVar x1, tVar x2 => =t=-var (x1 = x2)
+  | tInt, tInt => =t=-int
+  | tString, tString => =t=-string
+  | tArray t1, tArray t2 => =t=-array (t1 =t= t2)
+  | tSexp {n1} xs1, tSexp {n2} xs2 => =t=-sexp (p : n1 = n2) (transport _ p xs1 =sexp*= xs2)
+  | tFun {m1} xs1 c1 {n1} ts1 t1, tFun {m2} xs2 c2 {n2} ts2 t2 => =t=-fun (p : m1 = m2) (q : n1 = n2)
+                                                                          (transport _ p xs1 = {Array TVar m2} xs2)
+                                                                          (c1 =c= c2) (t1 =t= t2)
+                                                                          (transport (Array Type __) q ts1 =t*= ts2)
+  | tMu x1 t1, tMu x2 t2 => =t=-mu (x1 = x2) (t1 =t= t2)
+  | tMu x t1, t2 => =t=-unfoldLeft {t1' : Type} (\Pi {x : TVar} {t2' : Type} -> tMu x t2' /= t2) (t1' =t= t2)
+                                   (SubstT Nub.empty (Telescope.set x (tMu x t1) Telescope.empty) t1 t1')
+  | t1, tMu x t2 => =t=-unfoldRight {t2' : Type} (\Pi {x : TVar} {t1' : Type} -> t1 /= tMu x t1') (t1 =t= t2')
+                                    (SubstT Nub.empty (Telescope.set x (tMu x t2) Telescope.empty) t2 t2')
+  \where {
+
+    \use \level levelProp {t1 t2 : Type} : isProp (t1 =t= t2) => levelProp'
+
+    \lemma levelProp' {t1 t2 : Type} (p q : t1 =t= t2) : p = q \elim t1, t2, p, q
+      | tVar x1, tVar x2, =t=-var p, =t=-var q => pmap =t=-var propPath
+      | tInt, tInt, =t=-int, =t=-int => idp
+      | tString, tString, =t=-string, =t=-string => idp
+      | tArray t1, tArray t2, =t=-array p, =t=-array q => pmap =t=-array $ levelProp' p q
+      | tSexp {n1} xs1, tSexp {n2} xs2, =t=-sexp p1 q1, =t=-sexp p2 q2 =>
+        \have p1=p2 : p1 = p2 => propPath
+        \in transport (\lam p => \Pi (q : _) -> =t=-sexp p1 q1 = =t=-sexp p q) p1=p2
+            (\lam q => pmap (=t=-sexp p1) (=sexp*=.levelProp' q1 q)) q2
+
+      | tFun {m1} xs1 c1 {n1} ts1 t1, tFun {m2} xs2 c2 {n2} ts2 t2,
+      =t=-fun p1 q1 pxs1 pc1 pt1 pts1, =t=-fun p2 q2 pxs2 pc2 pt2 pts2 =>
+        \have | p : (p1, q1) = (p2, q2) => propPath
+        \in transport (\lam (p, q) => \Pi (a : _) (b : _) (c : _) (d : _)
+        -> =t=-fun p1 q1 pxs1 pc1 pt1 pts1 = =t=-fun p q a b c d)
+            p (\lam a b c d => path $ \lam i => =t=-fun p1 q1 (propPath i) (=c=.levelProp' pc1 b i)
+                (levelProp' pt1 c i) (=t*=.levelProp' pts1 d i))
+            pxs2 pc2 pt2 pts2
+
+      | tMu x1 t1, tMu x2 t2, =t=-mu p1 q1, =t=-mu p2 q2 => pmap2 =t=-mu propPath (levelProp' q1 q2)
+      | tMu x1 t1, tMu x2 t2, =t=-mu _ _, =t=-unfoldLeft n _ _ => \case n idp
+      | tMu x1 t1, tMu x2 t2, =t=-mu _ _, =t=-unfoldRight n _ _ => \case n idp
+      | tMu x1 t1, tMu x2 t2, =t=-unfoldLeft n _ _, =t=-mu _ _ => \case n idp
+      | tMu x1 t1, t4, =t=-unfoldLeft {t1'} n1 p1 q1, =t=-unfoldLeft {t2'} n2 p2 q2 =>
+        \have t1'=t2' => SubstT.functionality q1 q2
+        \in transport (\lam t1' => \Pi (a : _) (b : _) -> =t=-unfoldLeft n1 p1 q1
+          = =t=-unfoldLeft {_} {_} {_} {t1'} n2 a b)
+            t1'=t2' (\lam a b => path $ \lam i => =t=-unfoldLeft (\lam {x} {t2'} p => propPath {Empty} {n1 p} {n2 p} i)
+                (levelProp' p1 a i) (propPath i))
+            p2 q2
+
+      | tMu x1 t1, tMu x2 t2, =t=-unfoldLeft n _ _, =t=-unfoldRight _ _ _ => \case n idp
+      | tMu x1 t3, tMu x2 t2, =t=-unfoldRight n _ _, =t=-mu _ _ => \case n idp
+      | tMu x1 t3, tMu x2 t2, =t=-unfoldRight n _ _, =t=-unfoldLeft _ _ _ => \case n idp
+      | t1, tMu x2 t2, =t=-unfoldRight n1 p1 q1, =t=-unfoldRight n2 p2 q2 =>
+        \have t1'=t2' => SubstT.functionality q1 q2
+        \in transport (\lam t1' => \Pi (a : _) (b : _) -> =t=-unfoldRight n1 p1 q1
+          = =t=-unfoldRight {_} {_} {_} {t1'} n2 a b)
+            t1'=t2' (\lam a b => path $ \lam i => =t=-unfoldRight (\lam {x} {t2'} p => propPath {Empty} {n1 p} {n2 p} i)
+                (levelProp' p1 a i) (propPath i))
+            p2 q2
+  }
+
+\data \infix 1 =t*= {n : Nat} (ts1 ts2 : Array Type n) : \Set \elim n, ts1, ts2
+  | 0, nil, nil => =t*=-nil
+  | suc n, t1 :: ts1, t2 :: ts2 => =t*=-cons (t1 =t= t2) (ts1 =t*= ts2)
+  \where {
+
+    \use \level levelProp {n : Nat} {ts1 ts2 : Array Type n} : isProp (ts1 =t*= ts2) => levelProp'
+
+    \lemma levelProp' {n : Nat} {ts1 ts2 : Array Type n} (p q : ts1 =t*= ts2) : p = q \elim n, ts1, ts2, p, q
+      | 0, nil, nil, =t*=-nil, =t*=-nil => idp
+      | suc n, t1 :: ts1, t2 :: ts2, =t*=-cons p1 q1, =t*=-cons p2 q2 =>
+        pmap2 =t*=-cons (=t=.levelProp' p1 p2) (levelProp' q1 q2)
+  }
+
+\data \infix 1 =sexp= (xts1 xts2 : Type.Sexp) : \Set \elim xts1, xts2
+  | (lb1, n1, ts1), (lb2, n2, ts2) => =sexp=-refl (lb1 = lb2) (p : n1 = n2) (transport _ p ts1 =t*= ts2)
+  \where {
+
+    \use \level levelProp {xts1 xts2 : Type.Sexp} : isProp (xts1 =sexp= xts2) => levelProp'
+
+    \lemma levelProp' {xts1 xts2 : Type.Sexp} (p q : xts1 =sexp= xts2) : p = q \elim xts1, xts2, p, q
+      | (lb1, n1, ts1), (lb2, n2, ts2), =sexp=-refl plb1 pn1 pts1, =sexp=-refl plb2 pn2 pts2 =>
+        \have pn1=pn2 : pn1 = pn2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =sexp=-refl plb1 pn1 pts1 = =sexp=-refl plb2 p a) pn1=pn2
+            (\lam a => path $ \lam i => =sexp=-refl (propPath i) pn1 (=t*=.levelProp' pts1 a i)) pts2
+  }
+
+\data \infix 1 =sexp*= {n : Nat} (xs1 xs2 : Array Type.Sexp n) : \Set \elim n, xs1, xs2
+  | 0, nil, nil => =sexp*=-nil
+  | suc n, xts1 :: xs1, xts2 :: xs2 => =sexp*=-cons (xts1 =sexp= xts2) (xs1 =sexp*= xs2)
+  \where {
+
+    \use \level levelProp {n : Nat} {xs1 xs2 : Array Type.Sexp n} : isProp (xs1 =sexp*= xs2) => levelProp'
+
+    \lemma levelProp' {n : Nat} {xs1 xs2 : Array Type.Sexp n} (p q : xs1 =sexp*= xs2) : p = q \elim n, xs1, xs2, p, q
+      | 0, nil, nil, =sexp*=-nil, =sexp*=-nil => idp
+      | suc n, xts1 :: xs1, xts2 :: xs2, =sexp*=-cons p1 q1, =sexp*=-cons p2 q2 =>
+        pmap2 =sexp*=-cons (=sexp=.levelProp' p1 p2) (levelProp' q1 q2)
+  }
+
+\data \infix 1 =p= (p1 p2 : TPattern) : \Set \elim p1, p2
+  | tpWildcard, tpWildcard => =p=-wildcard
+  | tpTyped t1 p1, tpTyped t2 p2 => =p=-typed (t1 =t= t2) (p1 =p= p2)
+  | tpArray {n1} ps1, tpArray {n2} ps2 => =p=-array (p : n1 = n2) (transport _ p ps1 =p*= ps2)
+  | tpSexp lb1 {n1} ps1, tpSexp lb2 {n2} ps2 => =p=-sexp (lb1 = lb2) (p : n1 = n2) (transport _ p ps1 =p*= ps2)
+  | tpBoxed, tpBoxed => =p=-boxed
+  | tpUnboxed, tpUnboxed => =p=-unboxed
+  | tpStringShape, tpStringShape => =p=-stringShape
+  | tpArrayShape, tpArrayShape => =p=-arrayShape
+  | tpSexpShape, tpSexpShape => =p=-sexpShape
+  | tpFunShape, tpFunShape => =p=-funShape
+  \where {
+
+    \use \level levelProp {p1 p2 : TPattern} : isProp (p1 =p= p2) => levelProp'
+
+    \lemma levelProp' {p1 p2 : TPattern} (p q : p1 =p= p2) : p = q \elim p1, p2, p, q
+      | tpWildcard, tpWildcard, =p=-wildcard, =p=-wildcard => idp
+      | tpTyped t1 pat1, tpTyped t2 pat2, =p=-typed p1 q1, =p=-typed p2 q2 =>
+        pmap2 =p=-typed (=t=.levelProp' p1 p2) (levelProp' q1 q2)
+
+      | tpArray {n1} ps1, tpArray {n2} ps2, =p=-array p1 q1, =p=-array p2 q2 =>
+        \have p1=p2 : p1 = p2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =p=-array p1 q1 = =p=-array p a) p1=p2
+            (\lam a => pmap (=p=-array p1) (=p*=.levelProp' q1 a)) q2
+
+      | tpSexp lb1 {n1} ps1, tpSexp lb2 {n2} ps2, =p=-sexp plb1 p1 q1, =p=-sexp plb2 p2 q2 =>
+        \have p1=p2 : p1 = p2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =p=-sexp plb1 p1 q1 = =p=-sexp plb2 p a) p1=p2
+            (\lam a => path $ \lam i => =p=-sexp (propPath i) p1 (=p*=.levelProp' q1 a i)) q2
+
+      | tpBoxed, tpBoxed, =p=-boxed, =p=-boxed => idp
+      | tpUnboxed, tpUnboxed, =p=-unboxed, =p=-unboxed => idp
+      | tpStringShape, tpStringShape, =p=-stringShape, =p=-stringShape => idp
+      | tpArrayShape, tpArrayShape, =p=-arrayShape, =p=-arrayShape => idp
+      | tpSexpShape, tpSexpShape, =p=-sexpShape, =p=-sexpShape => idp
+      | tpFunShape, tpFunShape, =p=-funShape, =p=-funShape => idp
+  }
+
+\data \infix 1 =p*= {n : Nat} (ps1 ps2 : Array TPattern n) : \Set \elim n, ps1, ps2
+  | 0, nil, nil => =p*=-nil
+  | suc n, p1 :: ps1, p2 :: ps2 => =p*=-cons (p1 =p= p2) (ps1 =p*= ps2)
+  \where {
+
+    \use \level levelProp {n : Nat} {ps1 ps2 : Array TPattern n} : isProp (ps1 =p*= ps2) => levelProp'
+
+    \lemma levelProp' {n : Nat} {ps1 ps2 : Array TPattern n} (p q : ps1 =p*= ps2) : p = q \elim n, ps1, ps2, p, q
+      | 0, nil, nil, =p*=-nil, =p*=-nil => idp
+      | suc n, pat1 :: ps1, pat2 :: ps2, =p*=-cons p1 q1, =p*=-cons p2 q2 =>
+        pmap2 =p*=-cons (=p=.levelProp' p1 p2) (levelProp' q1 q2)
+  }
+
+\data \infix 1 =c= (c1 c2 : Constraint) : \Set \elim c1, c2
+  | cTop, cTop => =c=-top
+  | cAnd c11 c12, cAnd c21 c22 => =c=-and (c11 =c= c21) (c12 =c= c22)
+  | cInd t11 t12, cInd t21 t22 => =c=-ind (t11 =t= t21) (t12 =t= t22)
+  | cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2 => =c=-call (p : n1 = n2) (f1 =t= f2) (t1 =t= t2)
+                                                           (transport _ p ts1 =t*= ts2)
+  | cMatch t1 {n1} ps1, cMatch t2 {n2} ps2 => =c=-match (p : n1 = n2) (t1 =t= t2) (transport _ p ps1 =p*= ps2)
+  | cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2 => =c=-sexp (lb1 = lb2) (p : n1 = n2) (t1 =t= t2)
+                                                             (transport _ p ts1 =t*= ts2)
+  \where {
+
+    \use \level levelProp {c1 c2 : Constraint} : isProp (c1 =c= c2) => levelProp'
+
+    \lemma levelProp' {c1 c2 : Constraint} (p q : c1 =c= c2) : p = q \elim c1, c2, p, q
+      | cTop, cTop, =c=-top, =c=-top => idp
+      | cAnd c11 c12, cAnd c21 c22, =c=-and p1 q1, =c=-and p2 q2 => pmap2 =c=-and (levelProp' p1 p2) (levelProp' q1 q2)
+      | cInd t11 t12, cInd t21 t22, =c=-ind p1 q1, =c=-ind p2 q2 =>
+        pmap2 =c=-ind (=t=.levelProp' p1 p2) (=t=.levelProp' q1 q2)
+
+      | cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2, =c=-call p1 pf1 pt1 pts1, =c=-call p2 pf2 pt2 pts2 =>
+        \have p1=p2 : p1 = p2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =c=-call p1 pf1 pt1 pts1 = =c=-call p pf2 pt2 a) p1=p2
+            (\lam a => path $ \lam i => =c=-call p1 (=t=.levelProp' pf1 pf2 i)
+                (=t=.levelProp' pt1 pt2 i) (=t*=.levelProp' pts1 a i))
+            pts2
+
+      | cMatch t1 {n1} ps1, cMatch t2 {n2} ps2, =c=-match p1 q1 pps1, =c=-match p2 q2 pps2 =>
+        \have p1=p2 : p1 = p2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =c=-match p1 q1 pps1 = =c=-match p q2 a) p1=p2
+            (\lam a => path $ \lam i => =c=-match p1 (=t=.levelProp' q1 q2 i) (=p*=.levelProp' pps1 a i))
+            pps2
+
+      | cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2, =c=-sexp plb1 pn1 pt1 pts1, =c=-sexp plb2 pn2 pt2 pts2 =>
+        \have pn1=pn2 : pn1 = pn2 => propPath
+        \in transport (\lam p => \Pi (a : _) -> =c=-sexp plb1 pn1 pt1 pts1 = =c=-sexp plb2 p pt2 a) pn1=pn2
+            (\lam a => path $ \lam i => =c=-sexp (propPath i) pn1 (=t=.levelProp' pt1 pt2 i) (=t*=.levelProp' pts1 a i))
+            pts2
+  }

@@ -115,39 +115,6 @@
         pmap2 {_} {_} {Array Type.Sexp (suc n)} (::) (SubstSexp.functionality p1 p2) (functionality q1 q2)
   }
 
-\data SubstC (bvs : TVar*) (s : Subst) (c c' : Constraint) : \Prop \elim c, c'
-  | cTop, cTop => scTop
-  | cAnd c1 c2, cAnd c1' c2' => scAnd (SubstC bvs s c1 c1') (SubstC bvs s c2 c2')
-  | cInd t1 t2, cInd t1' t2' => scInd (SubstT bvs s t1 t1') (SubstT bvs s t2 t2')
-  | cCall f {n} ts t, cCall f' {n'} ts' t' => scCall (p : n = n') (SubstT bvs s f f') (SubstT bvs s t t')
-                                                     (SubstT* bvs s (transport (Array Type __) p ts) ts')
-  | cMatch t {n} ps, cMatch t' {n'} ps' => scMatch (p : n = n') (SubstT bvs s t t')
-                                                   (SubstP* bvs s (transport (Array TPattern __) p ps) ps')
-  | cSexp lb t {n} ts, cSexp lb' t' {n'} ts' => scSexp (lb = lb') (p : n = n') (SubstT bvs s t t')
-                                                       (SubstT* bvs s (transport (Array Type __) p ts) ts')
-  \where {
-
-    \lemma functionality {bvs : TVar*} {s : Subst} {c c1 c2 : Constraint}
-                         (p : SubstC bvs s c c1) (q : SubstC bvs s c c2)
-      : c1 = c2 \elim c, c1, c2, p, q
-      | cTop, cTop, cTop, scTop, scTop => idp
-      | cAnd c1 c2, cAnd c11 c12, cAnd c21 c22, scAnd p1 q1, scAnd p2 q2 =>
-        pmap2 cAnd (functionality p1 p2) (functionality q1 q2)
-
-      | cInd t1 t2, cInd t11 t12, cInd t21 t22, scInd p1 q1, scInd p2 q2 =>
-        pmap2 cInd (SubstT.functionality p1 p2) (SubstT.functionality q1 q2)
-
-      | cCall f {n} ts t, cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2, scCall idp p1 q1 s1, scCall idp p2 q2 s2 =>
-        path $ \lam i => cCall (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality s1 s2 i)
-            (SubstT.functionality q1 q2 i)
-
-      | cMatch t {n} ps, cMatch t1 {n1} ps1, cMatch t2 {n2} ps2, scMatch idp p1 q1, scMatch idp p2 q2 =>
-        pmap2 {_} {Array TPattern n} (cMatch __ {n} __) (SubstT.functionality p1 p2) (SubstP*.functionality q1 q2)
-
-      | cSexp lb t {n} ts, cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2, scSexp idp idp p1 q1, scSexp idp idp p2 q2 =>
-        path $ \lam i => cSexp lb (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality q1 q2 i)
-  }
-
 \data SubstP (bvs : TVar*) (s : Subst) (p p' : TPattern) : \Prop \elim p, p'
   | tpWildcard, tpWildcard => spWildcard
   | tpTyped t p, tpTyped t' p' => spTyped (SubstT bvs s t t') (SubstP bvs s p p')
@@ -194,4 +161,37 @@
       | 0, nil, nil, nil, tp*Nil, tp*Nil => idp {Array TPattern 0}
       | suc n, p :: ps, pat1 :: ps1, pat2 :: ps2, tp*Cons p1 q1, tp*Cons p2 q2 =>
         pmap2 {_} {_} {Array TPattern (suc n)} (::) (SubstP.functionality p1 p2) (functionality q1 q2)
+  }
+
+\data SubstC (bvs : TVar*) (s : Subst) (c c' : Constraint) : \Prop \elim c, c'
+  | cTop, cTop => scTop
+  | cAnd c1 c2, cAnd c1' c2' => scAnd (SubstC bvs s c1 c1') (SubstC bvs s c2 c2')
+  | cInd t1 t2, cInd t1' t2' => scInd (SubstT bvs s t1 t1') (SubstT bvs s t2 t2')
+  | cCall f {n} ts t, cCall f' {n'} ts' t' => scCall (p : n = n') (SubstT bvs s f f') (SubstT bvs s t t')
+                                                     (SubstT* bvs s (transport (Array Type __) p ts) ts')
+  | cMatch t {n} ps, cMatch t' {n'} ps' => scMatch (p : n = n') (SubstT bvs s t t')
+                                                   (SubstP* bvs s (transport (Array TPattern __) p ps) ps')
+  | cSexp lb t {n} ts, cSexp lb' t' {n'} ts' => scSexp (lb = lb') (p : n = n') (SubstT bvs s t t')
+                                                       (SubstT* bvs s (transport (Array Type __) p ts) ts')
+  \where {
+
+    \lemma functionality {bvs : TVar*} {s : Subst} {c c1 c2 : Constraint}
+                         (p : SubstC bvs s c c1) (q : SubstC bvs s c c2)
+      : c1 = c2 \elim c, c1, c2, p, q
+      | cTop, cTop, cTop, scTop, scTop => idp
+      | cAnd c1 c2, cAnd c11 c12, cAnd c21 c22, scAnd p1 q1, scAnd p2 q2 =>
+        pmap2 cAnd (functionality p1 p2) (functionality q1 q2)
+
+      | cInd t1 t2, cInd t11 t12, cInd t21 t22, scInd p1 q1, scInd p2 q2 =>
+        pmap2 cInd (SubstT.functionality p1 p2) (SubstT.functionality q1 q2)
+
+      | cCall f {n} ts t, cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2, scCall idp p1 q1 s1, scCall idp p2 q2 s2 =>
+        path $ \lam i => cCall (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality s1 s2 i)
+            (SubstT.functionality q1 q2 i)
+
+      | cMatch t {n} ps, cMatch t1 {n1} ps1, cMatch t2 {n2} ps2, scMatch idp p1 q1, scMatch idp p2 q2 =>
+        pmap2 {_} {Array TPattern n} (cMatch __ {n} __) (SubstT.functionality p1 p2) (SubstP*.functionality q1 q2)
+
+      | cSexp lb t {n} ts, cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2, scSexp idp idp p1 q1, scSexp idp idp p2 q2 =>
+        path $ \lam i => cSexp lb (SubstT.functionality p1 p2 i) {n} (SubstT*.functionality q1 q2 i)
   }

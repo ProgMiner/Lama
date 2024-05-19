@@ -42,24 +42,6 @@
       | suc n, t :: ts => fv t Nub.`union` fv* ts
   }
 
-\data Constraint : \Set0
-  | cTop
-  | cAnd Constraint Constraint
-  | cInd Type Type
-  | cCall Type {n : Nat} (Array Type n) Type
-  | cMatch Type {n : Nat} (Array TPattern n)
-  | cSexp Label Type {n : Nat} (Array Type n)
-  \where {
-
-    \func fv (c : Constraint) : TVar* \elim c
-      | cTop => Nub.empty
-      | cAnd c1 c2 => fv c1 Nub.`union` fv c2
-      | cInd t1 t2 => Type.fv t1 Nub.`union` Type.fv t2
-      | cCall t ts t' => Type.fv t Nub.`union` Type.fv* ts Nub.`union` Type.fv t'
-      | cMatch t ps => Type.fv t Nub.`union` TPattern.fv* ps
-      | cSexp _ t ts => Type.fv t Nub.`union` Type.fv* ts
-  }
-
 \data TPattern : \Set0
   | tpWildcard
   | tpTyped Type TPattern
@@ -88,4 +70,22 @@
     \func fv* {n : Nat} (ps : Array TPattern n) : TVar* \elim n, ps
       | 0, nil => Nub.empty
       | suc n, p :: ps => fv p Nub.`union` fv* ps
+  }
+
+\data Constraint : \Set0
+  | cTop
+  | cAnd Constraint Constraint
+  | cInd Type Type
+  | cCall Type {n : Nat} (Array Type n) Type
+  | cMatch Type {n : Nat} (Array TPattern n)
+  | cSexp Label Type {n : Nat} (Array Type n)
+  \where {
+
+    \func fv (c : Constraint) : TVar* \elim c
+      | cTop => Nub.empty
+      | cAnd c1 c2 => fv c1 Nub.`union` fv c2
+      | cInd t1 t2 => Type.fv t1 Nub.`union` Type.fv t2
+      | cCall t ts t' => Type.fv t Nub.`union` Type.fv* ts Nub.`union` Type.fv t'
+      | cMatch t ps => Type.fv t Nub.`union` TPattern.fv* ps
+      | cSexp _ t ts => Type.fv t Nub.`union` Type.fv* ts
   }
