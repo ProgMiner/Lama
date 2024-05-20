@@ -1,8 +1,11 @@
+\import Function.Meta
 \import Nub
 \import Paths
+\import Paths.Meta
 \import Subst
 \import Type
 \import TypeEquality
+\import Utils
 
 \data \infix 1 ||- (c1 c2 : Constraint) : \Set
   | ceCoerce {c1' c2' : Constraint} (c1 =c= c1') (c2 =c= c2') (c1' ||-' c2')
@@ -25,3 +28,107 @@
   | _, cSexp lb (tSexp {n} xs) {m} ts => ceSexp {i : Fin n} ((xs i).1 = lb) ((xs i).2 = m)
                                                 (\Pi {j : Fin n} (p : (xs j).2 = m) -> ((xs j).1 = lb)
                                                 -> transport _ p (xs j).3 =t*= ts)
+
+\data matchT (t : Type) (p : TPattern)
+             {n : Nat} (tps : Array (\Sigma Type TPattern) n)
+             {m : Nat} (eqs : Array Type m)
+  : \Prop \elim t, p, n, tps, m, eqs
+  | tVar _, tpWildcard, 0, nil, 0, nil => mtWildcardVar
+  | tInt, tpWildcard, 0, nil, 0, nil => mtWildcardInt
+  | tString, tpWildcard, 0, nil, 0, nil => mtWildcardString
+  | tArray t, tpWildcard, 1, (t', tpWildcard) :: nil, 0, nil => mtWildcardArray (t = t')
+  | tSexp {1} ((_, n, ts) :: nil), tpWildcard, n', tps, 0, nil => mtWildcardSexp (p : n = n') (transport (Array _ __) p
+      (\lam (i : Fin n) => (ts i, tpWildcard)) = {Array _ n'} tps)
+  | tFun _ _ _ _, tpWildcard, 0, nil, 0, nil => mtWildcardFun
+  | t, tpTyped t' p, n, tps, suc m, t'' :: eqs => mtTyped (t' = t'') (matchT t p tps eqs)
+  | tArray t, tpArray {n} ps, n', tps, 0, nil => mtArray (p : n = n') (transport (Array _ __) p
+      (\lam (i : Fin n) => (t, ps i)) = {Array _ n'} tps)
+  | tSexp {1} ((lb, n, ts) :: nil), tpSexp lb' {n'} ps, n1, tps, 0, nil => mtSexp (lb = lb') (p : n = n') (q : n = n1)
+      (transport (Array _ __) q (\lam (i : Fin n) => (ts i, ps (transport Fin p i))) = {Array _ n1} tps)
+  | tString, tpBoxed, 0, nil, 0, nil => mtBoxString
+  | tArray t, tpBoxed, 1, (t', tpWildcard) :: nil, 0, nil => mtBoxArray (t = t')
+  | tSexp {1} ((_, n, ts) :: nil), tpBoxed, n', tps, 0, nil => mtBoxSexp (p : n = n') (transport (Array _ __) p
+      (\lam (i : Fin n) => (ts i, tpWildcard)) = {Array _ n'} tps)
+  | tFun _ _ _ _, tpBoxed, 0, nil, 0, nil => mtBoxFun
+  | tInt, tpUnboxed, 0, nil, 0, nil => mtIntShape
+  | tString, tpStringShape, 0, nil, 0, nil => mtStringShape
+  | tArray t, tpArrayShape, 1, (t', tpWildcard) :: nil, 0, nil => mtArrayShape (t = t')
+  | tSexp {1} ((_, n, ts) :: nil), tpSexpShape, n', tps, 0, nil => mtSexpShape (p : n = n') (transport (Array _ __) p
+      (\lam (i : Fin n) => (ts i, tpWildcard)) = {Array _ n'} tps)
+  | tFun _ _ _ _, tpFunShape, 0, nil, 0, nil => mtFunShape
+  \where {
+
+    \lemma functionality {t : Type} {pat : TPattern} {n1 n2 m1 m2 : Nat}
+                         {tps1 : Array (\Sigma Type TPattern) n1} {eqs1 : Array Type m1}
+                         {tps2 : Array (\Sigma Type TPattern) n2} {eqs2 : Array Type m2}
+                         (p : matchT t pat tps1 eqs1) (q : matchT t pat tps2 eqs2)
+      : \Sigma (p : n1 = n2) (transport _ p tps1 = {Array _ n2} tps2)
+               (q : m1 = m2) (transport _ q eqs1 = {Array _ m2} eqs2)
+      \elim t, pat, n1, n2, m1, m2, tps1, eqs1, tps2, eqs2, p, q
+        | tVar t, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardVar, mtWildcardVar =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tInt, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardInt, mtWildcardInt =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tString, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardString, mtWildcardString =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tArray t, tpWildcard, 1, 1, 0, 0, (t1, tpWildcard) :: nil, nil, (t2, tpWildcard) :: nil, nil,
+        mtWildcardArray p, mtWildcardArray q => (idp, path $ \lam i => ((inv p *> q) i, tpWildcard) :: nil,
+                                                 idp, idp {Array _ 0})
+
+        | tSexp {1} ((lb, n, ts) :: nil), tpWildcard, n1, n2, 0, 0, tps1, nil, tps2, nil,
+        mtWildcardSexp p1 q1, mtWildcardSexp p2 q2 => (inv p1 *> p2, concat-transport-paths (Array _ __) p1 p2 q1 q2,
+                                                       idp, idp {Array _ 0})
+
+        | tFun _ _ _ _, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardFun, mtWildcardFun =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | t, tpTyped t' pat, n1, n2, suc m1, suc m2, tps1, t1 :: eqs1, tps2, t2 :: eqs2,
+        mtTyped idp p, mtTyped idp q =>
+          \have | (n1=n2, tps1=tps2, m1=m2, eqs1=eqs2) => functionality p q
+                | eqs1=eqs2' => Jl (\lam m m1=m => \Pi (a : Array Type m) -> transport _ m1=m eqs1 = {Array Type m} a
+                -> transport (Array Type __) (pmap suc m1=m) (t' :: eqs1) = {Array Type (suc m)} t' :: a)
+                    (\lam a p => path $ \lam i => t' :: p i) m1=m2 eqs2 eqs1=eqs2
+          \in (n1=n2, tps1=tps2, pmap suc m1=m2, eqs1=eqs2')
+
+        | tArray t, tpArray {n} ps, n1, n2, 0, 0, tps1, nil, tps2, nil, mtArray p1 q1, mtArray p2 q2 =>
+          (inv p1 *> p2, concat-transport-paths (Array _ __) p1 p2 q1 q2, idp, idp {Array _ 0})
+
+        | tSexp {1} ((lb, n, ts) :: nil), tpSexp lb' {n'} xs, n1, n2, 0, 0, tps1, nil, tps2, nil,
+        mtSexp plb1 p1 p1' q1, mtSexp plb2 p2 p2' q2 =>
+          \have | p1=p2 : p1 = p2 => propPath
+                | q1' => rewriteF p1=p2 q1
+          \in (inv p1' *> p2', concat-transport-paths (Array _ __) p1' p2' q1' q2, idp, idp {Array _ 0})
+
+        | tString, tpBoxed, 0, 0, 0, 0, nil, nil, nil, nil, mtBoxString, mtBoxString =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tArray t, tpBoxed, 1, 1, 0, 0, (t1, tpWildcard) :: nil, nil, (t2, tpWildcard) :: nil, nil,
+        mtBoxArray p, mtBoxArray q => (idp, path $ \lam i => ((inv p *> q) i, tpWildcard) :: nil, idp, idp {Array _ 0})
+
+        | tSexp {1} ((lb, n, ts) :: nil), tpBoxed, n1, n2, 0, 0, tps1, nil, tps2, nil,
+        mtBoxSexp p1 q1, mtBoxSexp p2 q2 => (inv p1 *> p2, concat-transport-paths (Array _ __) p1 p2 q1 q2,
+                                             idp, idp {Array _ 0})
+
+        | tFun _ _ _ _, tpBoxed, 0, 0, 0, 0, nil, nil, nil, nil, mtBoxFun, mtBoxFun =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tInt, tpUnboxed, 0, 0, 0, 0, nil, nil, nil, nil, mtIntShape, mtIntShape =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tString, tpStringShape, 0, 0, 0, 0, nil, nil, nil, nil, mtStringShape, mtStringShape =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tArray t, tpArrayShape, 1, 1, 0, 0, (t1, tpWildcard) :: nil, nil, (t2, tpWildcard) :: nil, nil,
+        mtArrayShape p, mtArrayShape q => (idp, path $ \lam i => ((inv p *> q) i, tpWildcard) :: nil,
+                                           idp, idp {Array _ 0})
+
+        | tSexp {1} ((lb, n, ts) :: nil), tpSexpShape, n1, n2, 0, 0, tps1, nil, tps2, nil,
+        mtSexpShape p1 q1, mtSexpShape p2 q2 => (inv p1 *> p2, concat-transport-paths (Array _ __) p1 p2 q1 q2,
+                                                 idp, idp {Array _ 0})
+
+        | tFun _ _ _ _, tpFunShape, 0, 0, 0, 0, nil, nil, nil, nil, mtFunShape, mtFunShape =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+  }

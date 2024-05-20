@@ -60,3 +60,13 @@
 
 \lemma nat=fin {n : Nat} {i j : Fin n} (p : i = {Nat} j) : i = {Fin n} j \elim p
   | idp => idp
+
+\sfunc concat-transport-paths {A : \Type} (B : A -> \Type) {a a1 a2 : A} (p1 : a = a1) (p2 : a = a2) {b : B a}
+                              {b1 : B a1} {b2 : B a2} (q1 : transport B p1 b = b1) (q2 : transport B p2 b = b2)
+  : transport B (inv p1 *> p2) b1 = b2 =>
+  pmap (transport _ (inv p1 *> p2)) (inv q1) *>
+  inv (transport_*> B p1 (inv p1 *> p2) _) *>
+  pmap (\lam p => transport B p _) (inv $ *>-assoc p1 (inv p1) p2) *>
+  pmap (\lam p => transport B (p *> p2) _) (*>_inv p1) *>
+  pmap (\lam p => transport B p _) (idp_*> p2) *>
+  q2

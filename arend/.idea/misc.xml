@@ -12,7 +12,6 @@
     <option name="errorPrintingOptions">
       <ArendPrintingOptions>
         <option name="showBinOpImplicitArgs" value="true" />
-        <option name="showImplicitArgs" value="true" />
         <option name="showLocalFieldInstance" value="false" />
       </ArendPrintingOptions>
     </option>
