@@ -1,7 +1,11 @@
+\import Arith.Nat
+\import Data.Array
 \import Function.Meta
+\import Logic
 \import Nub
 \import Paths
 \import Paths.Meta
+\import Set (Decide, Dec, decideEq, yes, no)
 \import Subst
 \import Type
 \import TypeEquality
@@ -24,7 +28,13 @@
                                                              {sts : Array Type n} (SubstT* Nub.empty s ts sts)
                                                              (transport _ p sts =t*= ts')
                                                              {st : Type} (SubstT Nub.empty s t st) (st =t= t')
-  -- TODO matchT*
+  | c, cMatch (tVar v) {n} ps => ceMatchVar (matchT* c (tVar v) (tVar v) ps)
+  | c, cMatch tInt {n} ps => ceMatchInt (matchT* c tInt tInt ps)
+  | c, cMatch tString {n} ps => ceMatchString (matchT* c tString tString ps)
+  | c, cMatch (tArray t) {n} ps => ceMatchArray (matchT* c (tArray t) (tArray t) ps)
+  | c, cMatch (tSexp {m} xs) {n} ps => ceMatchSexp (\Pi (i : Fin m) -> matchT* c (tSexp xs) (tSexp (xs i :: nil)) ps)
+  | c, cMatch (tFun xs c' ts t) {n} ps => ceMatchFun (matchT* c (tFun xs c' ts t) (tFun xs c' ts t) ps)
+  | c, cMatch (tMu x t) {n} ps => ceMatchMu (matchT* c (tMu x t) (tMu x t) ps)
   | _, cSexp lb (tSexp {n} xs) {m} ts => ceSexp {i : Fin n} ((xs i).1 = lb) ((xs i).2 = m)
                                                 (\Pi {j : Fin n} (p : (xs j).2 = m) -> ((xs j).1 = lb)
                                                 -> transport _ p (xs j).3 =t*= ts)
@@ -40,6 +50,7 @@
   | tSexp {1} ((_, n, ts) :: nil), tpWildcard, n', tps, 0, nil => mtWildcardSexp (p : n = n') (transport (Array _ __) p
       (\lam (i : Fin n) => (ts i, tpWildcard)) = {Array _ n'} tps)
   | tFun _ _ _ _, tpWildcard, 0, nil, 0, nil => mtWildcardFun
+  | tMu _ _, tpWildcard, 0, nil, 0, nil => mtWildcardMu
   | t, tpTyped t' p, n, tps, suc m, t'' :: eqs => mtTyped (t' = t'') (matchT t p tps eqs)
   | tArray t, tpArray {n} ps, n', tps, 0, nil => mtArray (p : n = n') (transport (Array _ __) p
       (\lam (i : Fin n) => (t, ps i)) = {Array _ n'} tps)
@@ -83,6 +94,9 @@
                                                        idp, idp {Array _ 0})
 
         | tFun _ _ _ _, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardFun, mtWildcardFun =>
+          (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+        | tMu _ _, tpWildcard, 0, 0, 0, 0, nil, nil, nil, nil, mtWildcardMu, mtWildcardMu =>
           (idp, idp {Array _ 0}, idp, idp {Array _ 0})
 
         | t, tpTyped t' pat, n1, n2, suc m1, suc m2, tps1, t1 :: eqs1, tps2, t2 :: eqs2,
@@ -131,4 +145,362 @@
 
         | tFun _ _ _ _, tpFunShape, 0, 0, 0, 0, nil, nil, nil, nil, mtFunShape, mtFunShape =>
           (idp, idp {Array _ 0}, idp, idp {Array _ 0})
+
+    \sfunc matchTDec (t : Type) (p : TPattern)
+      : Decide (TruncP (\Sigma (n m : Nat) (tps : Array (\Sigma Type TPattern) n)
+                               (eqs : Array Type m) (matchT t p tps eqs)))
+      \cowith
+        | decide => doMatch t p
+      \where {
+        \func doMatch (t : Type) (p : TPattern)
+          : Dec (TruncP (\Sigma (n m : Nat) (tps : Array (\Sigma Type TPattern) n)
+                                (eqs : Array Type m) (matchT t p tps eqs)))
+        \elim t, p
+          | tVar v, tpWildcard => yes $ inP (0, 0, nil, nil, mtWildcardVar)
+          | tInt, tpWildcard => yes $ inP (0, 0, nil, nil, mtWildcardInt)
+          | tString, tpWildcard => yes $ inP (0, 0, nil, nil, mtWildcardString)
+          | tArray t, tpWildcard => yes $ inP (1, 0, (t, tpWildcard) :: nil, nil, mtWildcardArray idp)
+          | tSexp {n} xs, tpWildcard => \case n \as n, xs \as xs : Array _ n {}
+          \return Dec (TruncP (\Sigma (n m : Nat) (tps : Array _ n) (eqs : Array _ m) (matchT (tSexp xs) _ tps eqs)))
+          \with {
+            | 0, nil => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp nil) tpWildcard {n} tps {m} eqs
+
+            | 1, (lb, n, ts) :: nil => yes $ inP (n, 0, \lam (i : Fin n) => (ts i, tpWildcard), nil,
+                                                  mtWildcardSexp {_} {_} {_} {n} idp (idp {Array _ n}))
+
+            | suc (suc n), _ :: _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp _) tpWildcard {n} tps {m} eqs
+          }
+
+          | tFun _ _ _ _, tpWildcard => yes $ inP (0, 0, nil, nil, mtWildcardFun)
+          | tMu _ _, tpWildcard => yes $ inP (0, 0, nil, nil, mtWildcardMu)
+
+          | t, tpTyped t' pat => \case doMatch t pat \with {
+            | yes (inP (n, m, tps, eqs, p)) => yes $ inP (n, suc m, tps, t' :: eqs, mtTyped idp p)
+            | no n' => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT t _ {n} tps {m} eqs
+            \with {
+              | n, tps, suc m, t'' :: eqs, mtTyped p q => n' (inP (n, m, tps, eqs, q))
+            }
+          }
+
+          | tArray t, tpArray {n} ps => yes $ inP (n, 0, \lam (i : Fin n) => (t, ps i), nil,
+                                                   mtArray idp (idp {Array _ n}))
+
+          | tSexp {n} xs, tpSexp lb {n'} ps => \case n \as n, xs \as xs : Array _ n {}
+          \return Dec (TruncP (\Sigma (n m : Nat) (tps : Array _ n) (eqs : Array _ m) (matchT (tSexp xs) _ tps eqs)))
+          \with {
+            | 0, nil => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp nil) (tpSexp lb {n'} ps) {n} tps {m} eqs
+
+            | 1, (lb', n, ts) :: nil => \case decideEq lb' lb, decideEq n n' \with {
+              | yes e1, yes e2 => yes $ inP (n, 0, \lam (i : Fin n) => (ts i, ps $ transport Fin e2 i), nil,
+                                             mtSexp e1 e2 idp (idp {Array _ n}))
+
+              | no n1, _ => no $ \lam (inP (n2, m, tps, eqs, p)) => \case
+                n2 \as n2, tps \as tps : Array _ n2,
+                m \as m, eqs \as eqs : Array _ m,
+                p : matchT (tSexp ((lb', n, ts) :: nil)) (tpSexp lb {n'} ps) {n2} tps {m} eqs \with {
+                | n2, tps, 0, nil, mtSexp p _ _ _ => n1 p
+              }
+
+              | yes e, no n1 => no $ \lam (inP (n2, m, tps, eqs, p)) => \case
+                n2 \as n2, tps \as tps : Array _ n2,
+                m \as m, eqs \as eqs : Array _ m,
+                p : matchT (tSexp ((lb', n, ts) :: nil)) (tpSexp lb {n'} ps) {n2} tps {m} eqs \with {
+                | n2, tps, 0, nil, mtSexp _ p _ _ => n1 p
+              }
+            }
+
+            | suc (suc n), _ :: _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp _) (tpSexp lb {n'} ps) {n} tps {m} eqs
+          }
+
+          | tString, tpBoxed => yes $ inP (0, 0, nil, nil, mtBoxString)
+          | tArray t, tpBoxed => yes $ inP (1, 0, (t, tpWildcard) :: nil, nil, mtBoxArray idp)
+          | tSexp {n} xs, tpBoxed => \case n \as n, xs \as xs : Array _ n {}
+          \return Dec (TruncP (\Sigma (n m : Nat) (tps : Array _ n) (eqs : Array _ m) (matchT (tSexp xs) _ tps eqs)))
+          \with {
+            | 0, nil => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp nil) tpBoxed {n} tps {m} eqs
+
+            | 1, (lb, n, ts) :: nil => yes $ inP (n, 0, \lam (i : Fin n) => (ts i, tpWildcard), nil,
+                                                  mtBoxSexp {_} {_} {_} {n} idp (idp {Array _ n}))
+
+            | suc (suc n), _ :: _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp _) tpBoxed {n} tps {m} eqs
+          }
+
+          | tFun _ _ _ _, tpBoxed => yes $ inP (0, 0, nil, nil, mtBoxFun)
+          | tInt, tpUnboxed => yes $ inP (0, 0, nil, nil, mtIntShape)
+          | tString, tpStringShape => yes $ inP (0, 0, nil, nil, mtStringShape)
+          | tArray t, tpArrayShape => yes $ inP (1, 0, (t, tpWildcard) :: nil, nil, mtArrayShape idp)
+          | tSexp {n} xs, tpSexpShape => \case n \as n, xs \as xs : Array _ n {}
+          \return Dec (TruncP (\Sigma (n m : Nat) (tps : Array _ n) (eqs : Array _ m) (matchT (tSexp xs) _ tps eqs)))
+          \with {
+            | 0, nil => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp nil) tpSexpShape {n} tps {m} eqs
+
+            | 1, (lb, n, ts) :: nil => yes $ inP (n, 0, \lam (i : Fin n) => (ts i, tpWildcard), nil,
+                                                  mtSexpShape {_} {_} {_} {n} idp (idp {Array _ n}))
+
+            | suc (suc n), _ :: _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+              n \as n, tps \as tps : Array _ n,
+              m \as m, eqs \as eqs : Array _ m,
+              p : matchT (tSexp _) tpSexpShape {n} tps {m} eqs
+          }
+
+          | tFun _ _ _ _, tpFunShape => yes $ inP (0, 0, nil, nil, mtFunShape)
+          | tVar v, tpArray {n'} ps => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpSexp lb {n'} ps => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpBoxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tVar v, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpArray _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpSexp _ _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpBoxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tInt, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpArray _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpSexp _ _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tString, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tArray _, tpSexp _ _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tArray _, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tArray _, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tArray _, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tArray _, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tSexp _, tpArray _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tSexp _, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tSexp _, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tSexp _, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tSexp _, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpArray _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpSexp _ _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tFun _ _ _ _, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpArray _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpSexp _ _ => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpBoxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpUnboxed => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpStringShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpArrayShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpSexpShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+
+          | tMu _ _, tpFunShape => no $ \lam (inP (n, m, tps, eqs, p)) => \case
+            n \as n, tps \as tps : Array _ n,
+            m \as m, eqs \as eqs : Array _ m,
+            p : matchT _ _ {n} tps {m} eqs
+      }
   }
+
+\data matchT* (c : Constraint) (st t : Type) {n : Nat} (ps : Array TPattern n) : \Set
+  | mtAst {m : Nat} {ts : Array Type m} {f : Fin m -> \Sigma (k : Nat) (Array TPattern k)}
+          (TruncP (\Sigma (i : Fin n) (n' m' : Nat) (tps : Array (\Sigma Type TPattern) n')
+                          (eqs : Array Type m') (matchT t (ps i) tps eqs)))
+          (\Pi (i : Fin n) {n' m' : Nat} {tps : Array (\Sigma Type TPattern) n'} {eqs : Array Type m'}
+          -> matchT t (ps i) tps eqs -> \Sigma
+                (\Pi (j : Fin n') -> TruncP (\Sigma (k : Fin m) (ts k = (tps j).1) (Index (tps j).2 (f k).2)))
+                (\Pi (j : Fin m') -> st =t= eqs j))
+          (\Pi (i : Fin m) -> c ||- cMatch (ts i) (f i).2)
