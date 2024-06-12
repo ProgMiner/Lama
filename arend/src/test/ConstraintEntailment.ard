@@ -1,0 +1,78 @@
+\import ConstraintEntailment
+\import Logic
+\import Paths
+\import Subst
+\import Type
+\import TypeEquality
+
+\lemma typedPatternIsNotShapePattern1 (p : TruncP (cTop ||- cMatch tString (tpTyped tInt tpWildcard :: nil)))
+  : Empty \elim p
+  | inP (ceCoerce {cTop} {cMatch t {n} ps} =c=-top (=c=-match idp eq1 eq2) ent) =>
+    \case ps \as ps : Array _ 1, eq2 : _ :: nil =p*= ps, ent : cTop ||-' cMatch t ps \with {
+      | tpTyped t tpWildcard :: nil, =p*=-cons (=p=-typed eq2 =p=-wildcard) =p*=-nil, ent => aux1 eq1 eq2 ent
+      | tpTyped _ (tpTyped _ _) :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ (tpArray _) :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ (tpSexp _ _) :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpBoxed :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpUnboxed :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpStringShape :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpArrayShape :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpSexpShape :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpTyped _ tpFunShape :: nil, =p*=-cons (=p=-typed _ ()) _, _
+      | tpWildcard :: nil, =p*=-cons () _, _
+      | tpArray _ :: nil, =p*=-cons () _, _
+      | tpSexp _ _ :: nil, =p*=-cons () _, _
+      | tpBoxed :: nil, =p*=-cons () _, _
+      | tpUnboxed :: nil, =p*=-cons () _, _
+      | tpStringShape :: nil, =p*=-cons () _, _
+      | tpArrayShape :: nil, =p*=-cons () _, _
+      | tpSexpShape :: nil, =p*=-cons () _, _
+      | tpFunShape :: nil, =p*=-cons () _, _
+    }
+  | inP (ceCoerce {cTop} {cMatch _ {0} nil} =c=-top (=c=-match () _ _) _)
+  | inP (ceCoerce {cTop} {cMatch _ {suc (suc _)} _} =c=-top (=c=-match () _ _) _)
+  | inP (ceCoerce {cTop} {cTop} =c=-top () _)
+  | inP (ceCoerce {cTop} {cAnd _ _} =c=-top () _)
+  | inP (ceCoerce {cTop} {cInd _ _} =c=-top () _)
+  | inP (ceCoerce {cTop} {cCall _ _ _} =c=-top () _)
+  | inP (ceCoerce {cTop} {cSexp _ _ _} =c=-top () _)
+  | inP (ceCoerce {cAnd _ _} () _ _)
+  | inP (ceCoerce {cInd _ _} () _ _)
+  | inP (ceCoerce {cCall _ _ _} () _ _)
+  | inP (ceCoerce {cMatch _ _} () _ _)
+  | inP (ceCoerce {cSexp _ _ _} () _ _)
+  \where {
+
+    \lemma aux1 {t1 t2 : Type} (eq1 : tString =t= t1) (eq2 : tInt =t= t2)
+               (p : cTop ||-' cMatch t1 (tpTyped t2 tpWildcard :: nil))
+      : Empty \elim t1, t2, eq1, eq2, p
+      | tString, tInt, =t=-string, =t=-int, ceRefl ()
+      | tString, tInt, =t=-string, =t=-int, ceMatchString (mtAst {m} {ts} _ p _) =>
+        \case (p 0 (mtTyped idp mtWildcardString)).2 0
+
+      | tString, tMu x t2, =t=-string, =t=-unfoldRight _ _ _, ceRefl ()
+      | tString, tMu x t2, =t=-string, =t=-unfoldRight {t2'} _ eq q, ceMatchString (mtAst _ p _) =>
+        \case (p 0 (mtTyped idp mtWildcardString)).2 0 \with {
+          | =t=-unfoldRight {t2''} _ p' q' =>
+            \have | t2'=t2'' => SubstT.functionality q q'
+                  | tInt=t=tString => =t=.trans (transport _ t2'=t2'' eq) (=t=.sym p')
+            \in \case tInt=t=tString
+        }
+
+      | tMu x t1, tInt, =t=-unfoldRight _ eq1 q, =t=-int, ceRefl ()
+      | tMu x t1, tInt, =t=-unfoldRight {t1'} _ eq1 q, =t=-int, ceMatchMu (mtAst _ p _) =>
+        \case (p 0 (mtTyped idp mtWildcardMu)).2 0 \with {
+          | =t=-unfoldLeft {t2'} _ p' q' =>
+            \have | t1'=t2' => SubstT.functionality q q'
+                  | tString=t=tInt => =t=.trans (transport _ t1'=t2' eq1) p'
+            \in \case tString=t=tInt
+        }
+
+      | tMu x1 t1, tMu x2 t2, =t=-unfoldRight {t1'} _ eq1 q1, =t=-unfoldRight {t2'} _ eq2 q2, ceRefl ()
+      | tMu x1 t1, tMu x2 t2, =t=-unfoldRight {t1'} _ eq1 q1, =t=-unfoldRight {t2'} _ eq2 q2, ceMatchMu (mtAst _ p _) =>
+        \case (p 0 (mtTyped idp mtWildcardMu)).2 0 \with {
+          | =t=-mu p1 eq3 => {?}
+          | =t=-unfoldLeft n _ _ => \case n idp
+          | =t=-unfoldRight n _ _ => \case n idp
+        }
+  }

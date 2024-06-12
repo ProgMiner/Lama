@@ -1,6 +1,7 @@
 \import Function.Meta
 \import HLevel
 \import Logic
+\import Logic.Meta
 \import Nub
 \import Paths
 \import Subst
@@ -67,6 +68,99 @@
             t1'=t2' (\lam a b => path $ \lam i => =t=-unfoldRight (\lam {x} {t2'} p => propPath {Empty} {n1 p} {n2 p} i)
                 (levelProp' p1 a i) (propPath i))
             p2 q2
+
+    \lemma refl (t : Type) : t =t= t \elim t
+      | tVar v => =t=-var idp
+      | tInt => =t=-int
+      | tString => =t=-string
+      | tArray t => =t=-array $ refl t
+      | tSexp xs => =t=-sexp idp $ =sexp*=.refl xs
+      | tFun xs c ts t => =t=-fun idp idp (idp {Array _ _}) (=c=.refl c) (=t=.refl t) (=t*=.refl ts)
+      | tMu v t => =t=-mu idp $ refl t
+
+    \lemma sym {t1 t2 : Type} (p : t1 =t= t2) : t2 =t= t1 \elim t1, t2, p
+      | tVar x1, tVar x2, =t=-var idp => =t=-var idp
+      | tInt, tInt, =t=-int => =t=-int
+      | tString, tString, =t=-string => =t=-string
+      | tArray t1, tArray t2, =t=-array p => =t=-array $ sym p
+      | tSexp xs1, tSexp xs2, =t=-sexp idp p => =t=-sexp idp $ =sexp*=.sym p
+      | tFun {m} xs1 c1 {n} ts1 t1, tFun xs2 c2 ts2 t2, =t=-fun idp idp idp pc pt pts =>
+        =t=-fun idp idp (idp {Array _ m}) (=c=.sym pc) (sym pt) (=t*=.sym pts)
+
+      | tMu x1 t1, tMu x2 t2, =t=-mu idp p => =t=-mu idp $ sym p
+      | tMu x1 t1, t2, =t=-unfoldLeft n p q => =t=-unfoldRight (\lam p' => n $ inv p') (sym p) q
+      | t1, tMu x2 t2, =t=-unfoldRight n p q => =t=-unfoldLeft (\lam p' => n $ inv p') (sym p) q
+
+    \lemma trans {t1 t2 t3 : Type} (p : t1 =t= t2) (q : t2 =t= t3) : t1 =t= t3 \elim t1, t2, t3, p, q
+      | tVar x1, tVar x2, tVar x3, =t=-var idp, =t=-var idp => =t=-var idp
+      | tInt, tInt, tInt, =t=-int, =t=-int => =t=-int
+      | tString, tString, tString, =t=-string, =t=-string => =t=-string
+      | tArray t1, tArray t2, tArray t3, =t=-array p, =t=-array q => =t=-array $ trans p q
+      | tSexp {n1} xs1, tSexp {n2} xs2, tSexp {n3} xs3, =t=-sexp idp p, =t=-sexp idp q => =t=-sexp idp $ =sexp*=.trans p q
+      | tFun {m1} xs1 c1 {n1} ts1 t3, tFun {m2} xs2 c2 {n2} ts2 t4, tFun {m3} xs3 c3 {n3} ts3 t5,
+      =t=-fun idp idp idp pc1 pt1 pts1, =t=-fun idp idp idp pc2 pt2 pts2 =>
+        =t=-fun idp idp (idp {Array _ m1}) (=c=.trans pc1 pc2) (=t=.trans pt1 pt2) (=t*=.trans pts1 pts2)
+
+      | tMu x1 t1, tMu x2 t2, tMu x3 t3, =t=-mu idp p, =t=-mu idp q => =t=-mu idp $ trans p q
+      | tMu x1 t1, tVar x2, tVar x3, =t=-unfoldLeft n p q, =t=-var idp => =t=-unfoldLeft n p q
+      | tMu x1 t1, tInt, tInt, =t=-unfoldLeft n p q, =t=-int => =t=-unfoldLeft n p q
+      | tMu x1 t1, tString, tString, =t=-unfoldLeft n p q, =t=-string => =t=-unfoldLeft n p q
+      | tMu x1 t1, tArray t2, tArray t3, =t=-unfoldLeft _ p1 q, =t=-array p2 =>
+        =t=-unfoldLeft (\case __) (trans p1 (=t=-array p2)) q
+
+      | tMu x1 t1, tSexp xs1, tSexp xs2, =t=-unfoldLeft _ p1 q, =t=-sexp idp p2 =>
+        =t=-unfoldLeft (\case __) (trans p1 (=t=-sexp idp p2)) q
+
+      | tMu x1 t1, tFun xs1 c1 ts1 t1, tFun xs2 c2 ts2 t2, =t=-unfoldLeft _ p q, =t=-fun idp idp idp pf pt pts =>
+        =t=-unfoldLeft (\case __) (trans p (=t=-fun idp idp (idp {Array _ _}) pf pt pts)) q
+
+      | tMu x1 t1, tMu x t2, t3, =t=-mu idp p1, =t=-unfoldLeft {t2'} n p2 q => =t=-unfoldLeft n {?} {?}
+      | tMu x1 t1, tMu x2 t2, tMu x3 t3, =t=-unfoldLeft n _ _, =t=-mu idp _ => \case n idp
+      | tMu x1 t1, tMu x2 t2, t3, =t=-unfoldLeft n _ _, =t=-unfoldLeft _ _ _ => \case n idp
+      | tVar x1, tVar x2, tMu x3 t3, =t=-var idp, =t=-unfoldRight n p q => =t=-unfoldRight n p q
+      | tInt, tInt, tMu x t3, =t=-int, =t=-unfoldRight n p q => =t=-unfoldRight n p q
+      | tString, tString, tMu x3 t3, =t=-string, =t=-unfoldRight n p q => =t=-unfoldRight n p q
+      | tArray t1, tArray t2, tMu x3 t3, =t=-array p1, =t=-unfoldRight _ p2 q =>
+        =t=-unfoldRight (\case __) (trans (=t=-array p1) p2) q
+
+      | tSexp xs1, tSexp xs2, tMu x3 t3, =t=-sexp idp p1, =t=-unfoldRight _ p2 q =>
+        =t=-unfoldRight (\case __) (trans (=t=-sexp idp p1) p2) q
+
+      | tFun xs1 c1 ts1 t1, tFun xs2 c2 ts2 t2, tMu x3 t3, =t=-fun idp idp idp pc pt pts, =t=-unfoldRight _ p q =>
+        =t=-unfoldRight (\case __) (trans (=t=-fun idp idp (idp {Array _ _}) pc pt pts) p) q
+
+      | tMu x1 t1, tMu x2 t2, tMu x3 t2, =t=-mu _ _, =t=-unfoldRight n _ _ => \case n idp
+      | t1, tMu x2 t2, tMu x3 t3, =t=-unfoldRight {t2'} n p1 q, =t=-mu idp p2 => {?}
+
+      | t1, tMu x2 t2, t3, =t=-unfoldRight {t2'} _ p1 q1, =t=-unfoldLeft {t3'} _ p2 q2 =>
+        trans (transport _ (SubstT.functionality q1 q2) p1) p2
+
+      | tMu x1 t1, t2, tMu x3 t3, =t=-unfoldLeft {t2'} n1 p1 q1, =t=-unfoldRight {t3'} n2 p2 q2 => {?}
+      | t1, tMu x2 t2, tMu x3 t3, =t=-unfoldRight _ _ _, =t=-unfoldRight n _ _ => \case n idp
+
+    \lemma subst-lem {t1 t1' t2 : Type} {s1 s2 : Subst} {bvs : TVar*} (p : t1 =t= t2) (q : SubstT bvs s1 t1 t1')
+                     (p1 : \Pi (v : TVar) (t : Type) -> Telescope.Get s1 v t
+                     -> ∃ (t' : Type) (Telescope.Get s2 v t') (t =t= t'))
+                     (p2 : \Pi (v : TVar) (t : Type) -> Telescope.Get s2 v t
+                     -> ∃ (t' : Type) (Telescope.Get s1 v t') (t =t= t'))
+      : ∃ (t2' : Type) (SubstT bvs s2 t2 t2') (t1' =t= t2') \elim t1, t1', t2, p, q
+      | tVar v, t1', tVar x2, =t=-var idp, stVar p => {?}
+      | tInt, tInt, tInt, =t=-int, stInt => inP (tInt, stInt, =t=-int)
+      | tString, tString, tString, =t=-string, stString => inP (tString, stString, =t=-string)
+      | tArray t1, tArray t1', tArray t2, =t=-array p, stArray q =>
+        \have (inP (t2', q', p')) => subst-lem p q p1 p2 \in inP (tArray t2', stArray q', =t=-array p')
+
+      | tSexp xs, tSexp xs', tSexp xs2, =t=-sexp p _x, stSexp p3 s => {?}
+      | tFun xs c ts t3, tFun xs' c' ts' t1', tFun xs2 c2 ts2 t4, =t=-fun p q p3 _x p4 _x1, stFun p5 q1 p6 s s3 q2 => {?}
+      | tMu x1 t1, tMu x1' t1', tMu x2 t2, =t=-mu p p3, stMu p4 q => {?}
+      | tMu x1 t1, tMu x1' t1', t2, =t=-unfoldLeft _x p s, stMu p3 q => {?}
+      | tVar x1, t1', tMu x2 t2, =t=-unfoldRight _x p s, stVar s3 => {?}
+      | tInt, tInt, tMu x2 t2, =t=-unfoldRight {t2'} _ p q, stInt => inP (tMu x2 t2', stMu idp {?}, =t=-unfoldRight (\case __) p {?})
+      | tString, tString, tMu x t3, =t=-unfoldRight _x p s, stString => {?}
+      | tArray t3, tArray t1', tMu x t4, =t=-unfoldRight _x p s, stArray q => {?}
+      | tSexp xs, tSexp xs', tMu x t3, =t=-unfoldRight _x p s, stSexp p3 s3 => {?}
+      | tFun xs c ts t3, tFun xs' c' ts' t1', tMu x t4, =t=-unfoldRight _x p s, stFun p3 q p4 s3 s4 q1 => {?}
+      | tMu x t3, tMu x' t1', tMu x1 t4, =t=-unfoldRight _x p s, stMu p3 q => {?}
   }
 
 \data \infix 1 =t*= {n : Nat} (ts1 ts2 : Array Type n) : \Set \elim n, ts1, ts2
@@ -80,6 +174,20 @@
       | 0, nil, nil, =t*=-nil, =t*=-nil => idp
       | suc n, t1 :: ts1, t2 :: ts2, =t*=-cons p1 q1, =t*=-cons p2 q2 =>
         pmap2 =t*=-cons (=t=.levelProp' p1 p2) (levelProp' q1 q2)
+
+    \lemma refl {n : Nat} (ts : Array Type n) : ts =t*= ts \elim n, ts
+      | 0, nil => =t*=-nil
+      | suc n, t :: ts => =t*=-cons (=t=.refl t) (refl ts)
+
+    \lemma sym {n : Nat} {ts1 ts2 : Array Type n} (p : ts1 =t*= ts2) : ts2 =t*= ts1 \elim n, ts1, ts2, p
+      | 0, nil, nil, =t*=-nil => =t*=-nil
+      | suc n, t1 :: ts1, t2 :: ts2, =t*=-cons p q => =t*=-cons (=t=.sym p) (sym q)
+
+    \lemma trans {n : Nat} {ts1 ts2 ts3 : Array Type n} (p : ts1 =t*= ts2) (q : ts2 =t*= ts3)
+      : ts1 =t*= ts3 \elim n, ts1, ts2, ts3, p, q
+      | 0, nil, nil, nil, =t*=-nil, =t*=-nil => =t*=-nil
+      | suc n, t1 :: ts1, t2 :: ts2, t3 :: ts3, =t*=-cons p1 q1, =t*=-cons p2 q2 =>
+        =t*=-cons (=t=.trans p1 p2) (trans q1 q2)
   }
 
 \data \infix 1 =sexp= (xts1 xts2 : Type.Sexp) : \Set \elim xts1, xts2
@@ -93,6 +201,17 @@
         \have pn1=pn2 : pn1 = pn2 => propPath
         \in transport (\lam p => \Pi (a : _) -> =sexp=-refl plb1 pn1 pts1 = =sexp=-refl plb2 p a) pn1=pn2
             (\lam a => path $ \lam i => =sexp=-refl (propPath i) pn1 (=t*=.levelProp' pts1 a i)) pts2
+
+    \lemma refl (xts : Type.Sexp) : xts =sexp= xts \elim xts
+      | (lb, n, ts) => =sexp=-refl idp idp (=t*=.refl ts)
+
+    \lemma sym {xts1 xts2 : Type.Sexp} (p : xts1 =sexp= xts2) : xts2 =sexp= xts1 \elim xts1, xts2, p
+      | (lb1, n1, ts1), (lb2, n2, ts2), =sexp=-refl idp idp p => =sexp=-refl idp idp (=t*=.sym p)
+
+    \lemma trans {xts1 xts2 xts3 : Type.Sexp} (p : xts1 =sexp= xts2) (q : xts2 =sexp= xts3)
+      : xts1 =sexp= xts3 \elim xts1, xts2, xts3, p, q
+      | (lb1, n1, ts1), (lb2, n2, ts2), (lb3, n3, ts3), =sexp=-refl idp idp p, =sexp=-refl idp idp q =>
+        =sexp=-refl idp idp (=t*=.trans p q)
   }
 
 \data \infix 1 =sexp*= {n : Nat} (xs1 xs2 : Array Type.Sexp n) : \Set \elim n, xs1, xs2
@@ -106,6 +225,20 @@
       | 0, nil, nil, =sexp*=-nil, =sexp*=-nil => idp
       | suc n, xts1 :: xs1, xts2 :: xs2, =sexp*=-cons p1 q1, =sexp*=-cons p2 q2 =>
         pmap2 =sexp*=-cons (=sexp=.levelProp' p1 p2) (levelProp' q1 q2)
+
+    \lemma refl {n : Nat} (xs : Array Type.Sexp n) : xs =sexp*= xs \elim n, xs
+      | 0, nil => =sexp*=-nil
+      | suc n, xts :: xs => =sexp*=-cons (=sexp=.refl xts) (refl xs)
+
+    \lemma sym {n : Nat} {xs1 xs2 : Array Type.Sexp n} (p : xs1 =sexp*= xs2) : xs2 =sexp*= xs1 \elim n, xs1, xs2, p
+      | 0, nil, nil, =sexp*=-nil => =sexp*=-nil
+      | suc n, xts1 :: xs1, xts2 :: xs2, =sexp*=-cons p q => =sexp*=-cons (=sexp=.sym p) (sym q)
+
+    \lemma trans {n : Nat} {xs1 xs2 xs3 : Array Type.Sexp n} (p : xs1 =sexp*= xs2) (q : xs2 =sexp*= xs3)
+      : xs1 =sexp*= xs3 \elim n, xs1, xs2, xs3, p, q
+      | 0, nil, nil, nil, =sexp*=-nil, =sexp*=-nil => =sexp*=-nil
+      | suc n, xts1 :: xs1, xts2 :: xs2, xts3 :: xs3, =sexp*=-cons p1 q1, =sexp*=-cons p2 q2 =>
+        =sexp*=-cons (=sexp=.trans p1 p2) (trans q1 q2)
   }
 
 \data \infix 1 =p= (p1 p2 : TPattern) : \Set \elim p1, p2
@@ -144,6 +277,48 @@
       | tpArrayShape, tpArrayShape, =p=-arrayShape, =p=-arrayShape => idp
       | tpSexpShape, tpSexpShape, =p=-sexpShape, =p=-sexpShape => idp
       | tpFunShape, tpFunShape, =p=-funShape, =p=-funShape => idp
+
+    \lemma refl (p : TPattern) : p =p= p \elim p
+      | tpWildcard => =p=-wildcard
+      | tpTyped t p => =p=-typed (=t=.refl t) (refl p)
+      | tpArray ps => =p=-array idp (=p*=.refl ps)
+      | tpSexp lb ps => =p=-sexp idp idp (=p*=.refl ps)
+      | tpBoxed => =p=-boxed
+      | tpUnboxed => =p=-unboxed
+      | tpStringShape => =p=-stringShape
+      | tpArrayShape => =p=-arrayShape
+      | tpSexpShape => =p=-sexpShape
+      | tpFunShape => =p=-funShape
+
+    \lemma sym {p1 p2 : TPattern} (p : p1 =p= p2) : p2 =p= p1 \elim p1, p2, p
+      | tpWildcard, tpWildcard, =p=-wildcard => =p=-wildcard
+      | tpTyped t1 p1, tpTyped t2 p2, =p=-typed p q => =p=-typed (=t=.sym p) (sym q)
+      | tpArray {n1} ps1, tpArray {n2} ps2, =p=-array idp p => =p=-array idp (=p*=.sym p)
+      | tpSexp lb1 {n1} ps1, tpSexp lb2 {n2} ps2, =p=-sexp idp idp p => =p=-sexp idp idp (=p*=.sym p)
+      | tpBoxed, tpBoxed, =p=-boxed => =p=-boxed
+      | tpUnboxed, tpUnboxed, =p=-unboxed => =p=-unboxed
+      | tpStringShape, tpStringShape, =p=-stringShape => =p=-stringShape
+      | tpArrayShape, tpArrayShape, =p=-arrayShape => =p=-arrayShape
+      | tpSexpShape, tpSexpShape, =p=-sexpShape => =p=-sexpShape
+      | tpFunShape, tpFunShape, =p=-funShape => =p=-funShape
+
+    \lemma trans {p1 p2 p3 : TPattern} (p : p1 =p= p2) (q : p2 =p= p3) : p1 =p= p3 \elim p1, p2, p3, p, q
+      | tpWildcard, tpWildcard, tpWildcard, =p=-wildcard, =p=-wildcard => =p=-wildcard
+      | tpTyped t1 p1, tpTyped t2 p2, tpTyped t3 p3, =p=-typed p1 q1, =p=-typed p2 q2 =>
+        =p=-typed (=t=.trans p1 p2) (trans q1 q2)
+
+      | tpArray {n1} ps1, tpArray {n2} ps2, tpArray {n3} ps3, =p=-array idp p, =p=-array idp q =>
+        =p=-array idp (=p*=.trans p q)
+
+      | tpSexp lb1 {n1} ps1, tpSexp lb2 {n2} ps2, tpSexp lb3 {n3} ps3, =p=-sexp idp idp p, =p=-sexp idp idp q =>
+        =p=-sexp idp idp (=p*=.trans p q)
+
+      | tpBoxed, tpBoxed, tpBoxed, =p=-boxed, =p=-boxed => =p=-boxed
+      | tpUnboxed, tpUnboxed, tpUnboxed, =p=-unboxed, =p=-unboxed => =p=-unboxed
+      | tpStringShape, tpStringShape, tpStringShape, =p=-stringShape, =p=-stringShape => =p=-stringShape
+      | tpArrayShape, tpArrayShape, tpArrayShape, =p=-arrayShape, =p=-arrayShape => =p=-arrayShape
+      | tpSexpShape, tpSexpShape, tpSexpShape, =p=-sexpShape, =p=-sexpShape => =p=-sexpShape
+      | tpFunShape, tpFunShape, tpFunShape, =p=-funShape, =p=-funShape => =p=-funShape
   }
 
 \data \infix 1 =p*= {n : Nat} (ps1 ps2 : Array TPattern n) : \Set \elim n, ps1, ps2
@@ -157,6 +332,20 @@
       | 0, nil, nil, =p*=-nil, =p*=-nil => idp
       | suc n, pat1 :: ps1, pat2 :: ps2, =p*=-cons p1 q1, =p*=-cons p2 q2 =>
         pmap2 =p*=-cons (=p=.levelProp' p1 p2) (levelProp' q1 q2)
+
+    \lemma refl {n : Nat} (ps : Array TPattern n) : ps =p*= ps \elim n, ps
+      | 0, nil => =p*=-nil
+      | suc n, xts :: xs => =p*=-cons (=p=.refl xts) (refl xs)
+
+    \lemma sym {n : Nat} {ps1 ps2 : Array TPattern n} (p : ps1 =p*= ps2) : ps2 =p*= ps1 \elim n, ps1, ps2, p
+      | 0, nil, nil, =p*=-nil => =p*=-nil
+      | suc n, p1 :: ps1, p2 :: ps2, =p*=-cons p q => =p*=-cons (=p=.sym p) (sym q)
+
+    \lemma trans {n : Nat} {ps1 ps2 ps3 : Array TPattern n} (p : ps1 =p*= ps2) (q : ps2 =p*= ps3)
+      : ps1 =p*= ps3 \elim n, ps1, ps2, ps3, p, q
+      | 0, nil, nil, nil, =p*=-nil, =p*=-nil => =p*=-nil
+      | suc n, t1 :: ts1, t2 :: ts2, t3 :: ts3, =p*=-cons p1 q1, =p*=-cons p2 q2 =>
+        =p*=-cons (=p=.trans p1 p2) (trans q1 q2)
   }
 
 \data \infix 1 =c= (c1 c2 : Constraint) : \Set \elim c1, c2
@@ -196,4 +385,37 @@
         \in transport (\lam p => \Pi (a : _) -> =c=-sexp plb1 pn1 pt1 pts1 = =c=-sexp plb2 p pt2 a) pn1=pn2
             (\lam a => path $ \lam i => =c=-sexp (propPath i) pn1 (=t=.levelProp' pt1 pt2 i) (=t*=.levelProp' pts1 a i))
             pts2
+
+    \lemma refl (c : Constraint) : c =c= c \elim c
+      | cTop => =c=-top
+      | cAnd c1 c2 => =c=-and (refl c1) (refl c2)
+      | cInd t1 t2 => =c=-ind (=t=.refl t1) (=t=.refl t2)
+      | cCall f ts t => =c=-call idp (=t=.refl f) (=t=.refl t) (=t*=.refl ts)
+      | cMatch t ps => =c=-match idp (=t=.refl t) (=p*=.refl ps)
+      | cSexp lb t ts => =c=-sexp idp idp (=t=.refl t) (=t*=.refl ts)
+
+    \lemma sym {c1 c2 : Constraint} (p : c1 =c= c2) : c2 =c= c1 \elim c1, c2, p
+      | cTop, cTop, =c=-top => =c=-top
+      | cAnd c11 c12, cAnd c21 c22, =c=-and p1 p2 => =c=-and (sym p1) (sym p2)
+      | cInd t11 t12, cInd t21 t22, =c=-ind p q => =c=-ind (=t=.sym p) (=t=.sym q)
+      | cCall f1 {n1} ts1 t1, cCall f2 {n2} ts2 t2, =c=-call idp pf pt pts =>
+        =c=-call idp (=t=.sym pf) (=t=.sym pt) (=t*=.sym pts)
+
+      | cMatch t1 {n1} ps1, cMatch t2 {n2} ps2, =c=-match idp p q => =c=-match idp (=t=.sym p) (=p*=.sym q)
+      | cSexp lb1 t1 {n1} ts1, cSexp lb2 t2 {n2} ts2, =c=-sexp idp idp p q => =c=-sexp idp idp (=t=.sym p) (=t*=.sym q)
+
+    \lemma trans {c1 c2 c3 : Constraint} (p : c1 =c= c2) (q : c2 =c= c3) : c1 =c= c3 \elim c1, c2, c3, p, q
+      | cTop, cTop, cTop, =c=-top, =c=-top => =c=-top
+      | cAnd c11 c12, cAnd c21 c22, cAnd c31 c32, =c=-and p1 q1, =c=-and p2 q2 => =c=-and (trans p1 p2) (trans q1 q2)
+      | cInd t11 t12, cInd t21 t22, cInd t31 t32, =c=-ind p1 q1, =c=-ind p2 q2 =>
+        =c=-ind (=t=.trans p1 p2) (=t=.trans q1 q2)
+
+      | cCall f1 ts1 t1, cCall f2 ts2 t2, cCall f3 ts3 t3, =c=-call idp pf1 pt1 pts1, =c=-call idp pf2 pt2 pts2 =>
+        =c=-call idp (=t=.trans pf1 pf2) (=t=.trans pt1 pt2) (=t*=.trans pts1 pts2)
+
+      | cMatch t1 ps1, cMatch t2 ps2, cMatch t3 ps3, =c=-match idp p1 q1, =c=-match idp p2 q2 =>
+        =c=-match idp (=t=.trans p1 p2) (=p*=.trans q1 q2)
+
+      | cSexp lb1 t1 ts1, cSexp lb2 t2 ts2, cSexp lb3 t3 ts3, =c=-sexp idp idp p1 q1, =c=-sexp idp idp p2 q2 =>
+        =c=-sexp idp idp (=t=.trans p1 p2) (=t*=.trans q1 q2)
   }
