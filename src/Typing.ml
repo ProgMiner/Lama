@@ -320,11 +320,9 @@ module Type = struct
             idx
         in
 
-        let module IM = Map.Make(Int) in
-
         let module SF = struct
 
-            type x = Subst.t * t IM.t
+            type x = Subst.t * (t * t) list
             type t = x -> x
         end in
 
@@ -356,15 +354,16 @@ module Type = struct
             if l <> k then failwith "unify: same variable on different levels" ;
             Fun.id
 
-        (* orderding is needed here to achieve deduplication in residuals map *)
-        | `LVar (x, _) as t1, (`LVar (y, _) as t2) when x > y -> unify_t (t2, t1)
-        | `LVar (x, _), t ->
+        | `LVar (_, l) as t1, (`LVar (_, k) as t2) when l > k -> unify_t (t2, t1)
+        | `LVar (x, l), t ->
             (*  example: lv_1^0 = [lv_2^1]
              *  result:  lv_1^0 = [lv_3^0] and lv_2^1 |-> lv_3^0
              *
-             *  we need to <<refresh>> type `t` with highlevel variables instead of lowlevel
+             *  we need to <<refresh>> lowlevel variables in type `t` with highlevel ones
              *  and record refreshing in result substitution (lv_2^1 |-> lv_3^0),
              *  as a residual we record refreshed equation (lv_1^0 = [lv_3^0])
+             *
+             *  !!! same operation we need to do with all constraints below !!!
              *)
 
             failwith "TODO: deal with lowlevel variables in t"
@@ -530,6 +529,18 @@ module Type = struct
         | E.Int _ -> [], `Int
         | E.String _ -> [], `String
         | E.Lambda (xs, b) ->
+            (* here we generate variables for parameters on special level `k`
+             * next we infer type of body on lower level (`k + 1`)
+             * and simplify them on this level
+             *
+             * after that we have residual constraints and substitution
+             * we apply substitution and split residuals by having variables on level `k` in them
+             * it is must be guaranteed that no variables on lower levels exist
+             *
+             * on last step we need to perform non-abigious simplification on level `k`
+             * to eliminate obvious constraints
+             *)
+
             (*
             let xts = List.map (fun x -> x, new_tv ()) xs in
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
