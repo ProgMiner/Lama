@@ -114,7 +114,10 @@
       | tMu x1 t1, tFun xs1 c1 ts1 t1, tFun xs2 c2 ts2 t2, =t=-unfoldLeft _ p q, =t=-fun idp idp idp pf pt pts =>
         =t=-unfoldLeft (\case __) (trans p (=t=-fun idp idp (idp {Array _ _}) pf pt pts)) q
 
-      | tMu x1 t1, tMu x t2, t3, =t=-mu idp p1, =t=-unfoldLeft {t2'} n p2 q => =t=-unfoldLeft n {?} {?}
+      | tMu x1 t1, tMu x2 t2, t3, =t=-mu idp p1, =t=-unfoldLeft {t2'} n p2 q =>
+        \have (inP (t1', p', q')) => subst-lem (sym p1) q
+        \in =t=-unfoldLeft n {?} q'
+
       | tMu x1 t1, tMu x2 t2, tMu x3 t3, =t=-unfoldLeft n _ _, =t=-mu idp _ => \case n idp
       | tMu x1 t1, tMu x2 t2, t3, =t=-unfoldLeft n _ _, =t=-unfoldLeft _ _ _ => \case n idp
       | tVar x1, tVar x2, tMu x3 t3, =t=-var idp, =t=-unfoldRight n p q => =t=-unfoldRight n p q
@@ -138,29 +141,33 @@
       | tMu x1 t1, t2, tMu x3 t3, =t=-unfoldLeft {t2'} n1 p1 q1, =t=-unfoldRight {t3'} n2 p2 q2 => {?}
       | t1, tMu x2 t2, tMu x3 t3, =t=-unfoldRight _ _ _, =t=-unfoldRight n _ _ => \case n idp
 
-    \lemma subst-lem {t1 t1' t2 : Type} {s1 s2 : Subst} {bvs : TVar*} (p : t1 =t= t2) (q : SubstT bvs s1 t1 t1')
-                     (p1 : \Pi (v : TVar) (t : Type) -> Telescope.Get s1 v t
-                     -> ∃ (t' : Type) (Telescope.Get s2 v t') (t =t= t'))
-                     (p2 : \Pi (v : TVar) (t : Type) -> Telescope.Get s2 v t
-                     -> ∃ (t' : Type) (Telescope.Get s1 v t') (t =t= t'))
-      : ∃ (t2' : Type) (SubstT bvs s2 t2 t2') (t1' =t= t2') \elim t1, t1', t2, p, q
-      | tVar v, t1', tVar x2, =t=-var idp, stVar p => {?}
-      | tInt, tInt, tInt, =t=-int, stInt => inP (tInt, stInt, =t=-int)
-      | tString, tString, tString, =t=-string, stString => inP (tString, stString, =t=-string)
-      | tArray t1, tArray t1', tArray t2, =t=-array p, stArray q =>
-        \have (inP (t2', q', p')) => subst-lem p q p1 p2 \in inP (tArray t2', stArray q', =t=-array p')
+    \lemma subst-lem {t1 t1' t2 : Type} {s : Subst} {bvs : TVar*} (p : t1 =t= t2) (q : SubstT bvs s t1 t1')
+      : Exists (t2' : Type) (t1' =t= t2') (SubstT bvs s t2 t2')
+      => {?}
 
-      | tSexp xs, tSexp xs', tSexp xs2, =t=-sexp p _x, stSexp p3 s => {?}
-      | tFun xs c ts t3, tFun xs' c' ts' t1', tFun xs2 c2 ts2 t4, =t=-fun p q p3 _x p4 _x1, stFun p5 q1 p6 s s3 q2 => {?}
-      | tMu x1 t1, tMu x1' t1', tMu x2 t2, =t=-mu p p3, stMu p4 q => {?}
-      | tMu x1 t1, tMu x1' t1', t2, =t=-unfoldLeft _x p s, stMu p3 q => {?}
-      | tVar x1, t1', tMu x2 t2, =t=-unfoldRight _x p s, stVar s3 => {?}
-      | tInt, tInt, tMu x2 t2, =t=-unfoldRight {t2'} _ p q, stInt => inP (tMu x2 t2', stMu idp {?}, =t=-unfoldRight (\case __) p {?})
-      | tString, tString, tMu x t3, =t=-unfoldRight _x p s, stString => {?}
-      | tArray t3, tArray t1', tMu x t4, =t=-unfoldRight _x p s, stArray q => {?}
-      | tSexp xs, tSexp xs', tMu x t3, =t=-unfoldRight _x p s, stSexp p3 s3 => {?}
-      | tFun xs c ts t3, tFun xs' c' ts' t1', tMu x t4, =t=-unfoldRight _x p s, stFun p3 q p4 s3 s4 q1 => {?}
-      | tMu x t3, tMu x' t1', tMu x1 t4, =t=-unfoldRight _x p s, stMu p3 q => {?}
+    -- \lemma subst-lem {t1 t1' t2 : Type} {s1 s2 : Subst} {bvs : TVar*} (p : t1 =t= t2) (q : SubstT bvs s1 t1 t1')
+    --                  (p1 : \Pi (v : TVar) (t : Type) -> Telescope.Get s1 v t
+    --                  -> ∃ (t' : Type) (Telescope.Get s2 v t') (t =t= t'))
+    --                  (p2 : \Pi (v : TVar) (t : Type) -> Telescope.Get s2 v t
+    --                  -> ∃ (t' : Type) (Telescope.Get s1 v t') (t =t= t'))
+    --   : ∃ (t2' : Type) (SubstT bvs s2 t2 t2') (t1' =t= t2') \elim t1, t1', t2, p, q
+    --   | tVar v, t1', tVar x2, =t=-var idp, stVar p => {?}
+    --   | tInt, tInt, tInt, =t=-int, stInt => inP (tInt, stInt, =t=-int)
+    --   | tString, tString, tString, =t=-string, stString => inP (tString, stString, =t=-string)
+    --   | tArray t1, tArray t1', tArray t2, =t=-array p, stArray q =>
+    --     \have (inP (t2', q', p')) => subst-lem p q p1 p2 \in inP (tArray t2', stArray q', =t=-array p')
+
+    --   | tSexp xs, tSexp xs', tSexp xs2, =t=-sexp p _x, stSexp p3 s => {?}
+    --   | tFun xs c ts t3, tFun xs' c' ts' t1', tFun xs2 c2 ts2 t4, =t=-fun p q p3 _x p4 _x1, stFun p5 q1 p6 s s3 q2 => {?}
+    --   | tMu x1 t1, tMu x1' t1', tMu x2 t2, =t=-mu p p3, stMu p4 q => {?}
+    --   | tMu x1 t1, tMu x1' t1', t2, =t=-unfoldLeft _x p s, stMu p3 q => {?}
+    --   | tVar x1, t1', tMu x2 t2, =t=-unfoldRight _x p s, stVar s3 => {?}
+    --   | tInt, tInt, tMu x2 t2, =t=-unfoldRight {t2'} _ p q, stInt => inP (tMu x2 t2', stMu idp {?}, =t=-unfoldRight (\case __) p {?})
+    --   | tString, tString, tMu x t3, =t=-unfoldRight _x p s, stString => {?}
+    --   | tArray t3, tArray t1', tMu x t4, =t=-unfoldRight _x p s, stArray q => {?}
+    --   | tSexp xs, tSexp xs', tMu x t3, =t=-unfoldRight _x p s, stSexp p3 s3 => {?}
+    --   | tFun xs c ts t3, tFun xs' c' ts' t1', tMu x t4, =t=-unfoldRight _x p s, stFun p3 q p4 s3 s4 q1 => {?}
+    --   | tMu x t3, tMu x' t1', tMu x1 t4, =t=-unfoldRight _x p s, stMu p3 q => {?}
   }
 
 \data \infix 1 =t*= {n : Nat} (ts1 ts2 : Array Type n) : \Set \elim n, ts1, ts2
