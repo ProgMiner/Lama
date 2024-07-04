@@ -162,7 +162,10 @@ module Type = struct
 
     let free_lvars p =
         let rec ftv_t bvs fvs : t -> _ = function
-        | `GVar x -> if IS.mem x bvs then fvs else failwith "free_lvars: free ground variable"
+        | `GVar x ->
+            if not @@ IS.mem x bvs then failwith "free_lvars: free ground variable" ;
+            fvs
+
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "free_lvars: bound logic variable" ;
             if p l then IS.add x fvs else fvs
@@ -206,6 +209,58 @@ module Type = struct
             method sexp = ftv_sexp
             method p = ftv_p
             method c = ftv_c
+        end
+
+    (* convert logic variables to ground *)
+
+    let lvars_to_gvars p =
+        let rec ltog_t bvs : t -> t = function
+        | `GVar x as t ->
+            if not @@ IS.mem x bvs then failwith "free_lvars: free ground variable" ;
+            t
+
+        | `LVar (x, l) as t ->
+            if IS.mem x bvs then failwith "free_lvars: bound logic variable" ;
+            if p l then `GVar x else t
+
+        | `Int -> `Int
+        | `String -> `String
+        | `Array t -> `Array (ltog_t bvs t)
+        | `Sexp xs -> `Sexp (ltog_sexp bvs xs)
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            `Arrow (xs, List.map (ltog_c bvs) c, List.map (ltog_t bvs) ts, ltog_t bvs t)
+
+        | `Mu (x, t) -> `Mu (x, ltog_t bvs t)
+
+        and ltog_sexp bvs ((xs, row) : sexp) : sexp =
+            (SexpConstructors.map (List.map @@ ltog_t bvs) xs, row)
+
+        and ltog_p bvs : p -> p = function
+        | `Wildcard -> `Wildcard
+        | `Typed (t, p) -> `Typed (ltog_t bvs t, ltog_p bvs p)
+        | `Array ps -> `Array (List.map (ltog_p bvs) ps)
+        | `Sexp (x, ps) -> `Sexp (x, List.map (ltog_p bvs) ps)
+        | `Boxed -> `Boxed
+        | `Unboxed -> `Unboxed
+        | `StringTag -> `StringTag
+        | `ArrayTag -> `ArrayTag
+        | `SexpTag -> `SexpTag
+        | `FunTag -> `FunTag
+
+        and ltog_c bvs : c -> c = function
+        | `Eq (t1, t2) -> `Eq (ltog_t bvs t1, ltog_t bvs t2)
+        | `Ind (t1, t2) -> `Ind (ltog_t bvs t1, ltog_t bvs t2)
+        | `Call (t, ts, t') -> `Call (ltog_t bvs t, List.map (ltog_t bvs) ts, ltog_t bvs t')
+        | `Match (t, ps) -> `Match (ltog_t bvs t, List.map (ltog_p bvs) ps)
+        in
+
+        object
+
+            method t = ltog_t
+            method sexp = ltog_sexp
+            method p = ltog_p
+            method c = ltog_c
         end
 
     (* substitution *)
@@ -463,11 +518,11 @@ module Type = struct
             r: c list;
         }
 
-        type unsat =
-        | Nested of unsat list
+        type fail =
+        | Nested of fail list
         | Unification of t * t
 
-        exception Unsat of unsat
+        exception Failure of fail
     end
 
     let simplify var_gen level =
@@ -482,7 +537,7 @@ module Type = struct
             let r = List.map (fun (t1, t2) -> `Eq (t1, t2)) r in
             [[], { s = s; r = r @ st.r }]
 
-            with Unification_failure (t1, t2) -> raise @@ Unsat (Unification (t1, t2))
+            with Unification_failure (t1, t2) -> raise @@ Failure (Unification (t1, t2))
             end
 
         | c -> failwith @@ "TODO " ^ show_c c
@@ -518,11 +573,11 @@ module Type = struct
         and full' errs = function
         | [] ->
             if errs = [] then failwith "BUG: no solutions" ;
-            raise @@ Unsat (Nested errs)
+            raise @@ Failure (Nested errs)
 
         | (cs, st) :: xs ->
             try full cs st
-            with Unsat err -> full' (err :: errs) xs
+            with Failure err -> full' (err :: errs) xs
         in
 
         object
@@ -536,7 +591,7 @@ module Type = struct
 
     (* type inferrer *)
 
-    let make_infer () =
+    let infer () =
         let module E = Expr in
 
         let prev_var_idx = Stdlib.ref 0 in
@@ -581,37 +636,37 @@ module Type = struct
             List.rev ps, ctx
         in
 
-        let rec infer ctx : E.t -> c list * t = function
+        let rec infer_t ctx : E.t -> c list * t = function
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
-            let c2, t = infer ctx e in
+            let c2, t = infer_t ctx e in
             c1 @ c2, t
 
         | E.Seq (l, r) ->
-            let c1, _ = infer ctx l in
-            let c2, t = infer ctx r in
+            let c1, _ = infer_t ctx l in
+            let c2, t = infer_t ctx r in
             c1 @ c2, t
 
         | E.Assign (l, r) ->
-            let c1, t = infer ctx l in
-            let c2, t' = infer ctx r in
+            let c1, t = infer_t ctx l in
+            let c2, t' = infer_t ctx r in
             `Eq (t, t') :: c1 @ c2, t
 
         | E.Binop (l, r) ->
-            let c1, t1 = infer ctx l in
-            let c2, t2 = infer ctx r in
+            let c1, t1 = infer_t ctx l in
+            let c2, t2 = infer_t ctx r in
             `Eq (t1, `Int) :: `Eq (t2, `Int) :: c1 @ c2, `Int
 
         | E.Call (f, xs) ->
-            let c, t = infer ctx f in
-            let cts = List.map (infer ctx) xs in
+            let c, t = infer_t ctx f in
+            let cts = List.map (infer_t ctx) xs in
             let c = List.fold_left (fun c (c', _) -> c @ c') c cts in
             let s = new_tv () in
             `Call (t, List.map snd cts, s) :: c, s
 
         | E.Subscript (x, i) ->
-            let c1, t1 = infer ctx x in
-            let c2, t2 = infer ctx i in
+            let c1, t1 = infer_t ctx x in
+            let c2, t2 = infer_t ctx i in
             let s = new_tv () in
             `Eq (t2, `Int) :: `Ind (t1, s) :: c1 @ c2, s
 
@@ -626,14 +681,14 @@ module Type = struct
 
             let xts = List.map (fun x -> x, new_tv ()) xs in
 
-            (* next we infer type of body on lower level (`k + 1`)
+            (* next we infer_t type of body on lower level (`k + 1`)
              * and simplify them on this level
              *)
 
             current_level := !current_level + 1 ;
 
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
-            let c, t = infer ctx' b in
+            let c, t = infer_t ctx' b in
 
             let Simpl.{ s; r = c } =
                 let simplify = simplify prev_var_idx !current_level in
@@ -660,9 +715,7 @@ module Type = struct
              * "true" residual constraints are free since we unable to solve them on level `k`,
              * other returned constraints are bound since we unable to solve them deterministically
              *
-             * we apply substitution and collect free variables on level `k` as bound
-             *
-             * it is must be guaranteed that no variables on lower levels exist
+             * we apply substitution and collect free variables on level `k` and `k + 1` as bound
              *)
 
             let apply_subst = apply_subst s in
@@ -672,7 +725,7 @@ module Type = struct
 
             let bvs =
                 let level = !current_level in
-                let free_lvars = free_lvars @@ fun l -> l = level in
+                let free_lvars = free_lvars @@ fun l -> l >= level in
 
                 let fvs = IS.empty in
                 let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
@@ -683,21 +736,27 @@ module Type = struct
 
             (* to build result type, we need to convert bound variables to ground *)
 
-            (*
-            fc, `Arrow (bvs, bc, ts, t)
-            *)
+            let bc, ts, t =
+                let level = !current_level in
+                let lvars_to_gvars = lvars_to_gvars @@ fun l -> l >= level in
 
-            failwith "TODO"
+                let ts = List.map (lvars_to_gvars#t IS.empty) ts in
+                let bc = List.map (lvars_to_gvars#c IS.empty) bc in
+                let t = lvars_to_gvars#t IS.empty t in
+                bc, ts, t
+            in
+
+            fc, `Arrow (bvs, bc, ts, t)
 
         | E.Skip -> [], new_tv ()
         | E.Array xs ->
-            let css = List.map (infer ctx) xs in
+            let css = List.map (infer_t ctx) xs in
             let t = new_tv () in
             let c = List.fold_left (fun c (c', s) -> `Eq (t, s) :: c @ c') [] css in
             c, `Array t
 
         | E.Sexp (x, xs) ->
-            let css = List.map (infer ctx) xs in
+            let css = List.map (infer_t ctx) xs in
             let c = List.fold_left (fun c (c', _) -> c @ c') [] css in
 
             let t = new_tv () in
@@ -705,28 +764,28 @@ module Type = struct
             `Eq (t, `Sexp (xs, new_var ())) :: c, t
 
         | E.If (c, t, f) ->
-            let c1, _ = infer ctx c in
-            let c2, t = infer ctx t in
-            let c3, t' = infer ctx f in
+            let c1, _ = infer_t ctx c in
+            let c2, t = infer_t ctx t in
+            let c3, t' = infer_t ctx f in
             `Eq (t, t') :: c1 @ c2 @ c3, t
 
         | E.While (c, b) ->
-            let c1, _ = infer ctx c in
-            let c2, _ = infer ctx b in
+            let c1, _ = infer_t ctx c in
+            let c2, _ = infer_t ctx b in
             c1 @ c2, new_tv ()
 
         | E.DoWhile (b, c) ->
-            let c1, _ = infer ctx b in
-            let c2, _ = infer ctx c in
+            let c1, _ = infer_t ctx b in
+            let c2, _ = infer_t ctx c in
             c1 @ c2, new_tv ()
 
         | E.Case (x, bs) ->
-            let c, t = infer ctx x in
+            let c, t = infer_t ctx x in
             let s = new_tv () in
 
             let f (c, ps) (p, b) =
                 let p, ctx = infer_p ctx p in
-                let c', s' = infer ctx b in
+                let c', s' = infer_t ctx b in
                 `Eq (s, s') :: c @ c', p::ps
             in
 
@@ -735,7 +794,7 @@ module Type = struct
 
         and infer_decl ctx = function
         | E.Var (x, v) ->
-            let c, t = infer ctx v in
+            let c, t = infer_t ctx v in
             `Eq (Context.find x ctx, t) :: c
 
         | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
@@ -750,9 +809,11 @@ module Type = struct
         object
 
             method pattern = infer_p
-            method term = infer
+            method term = infer_t
 
             method decl = infer_decl
             method decls = infer_decls
+
+            method simplify = simplify prev_var_idx
         end
 end

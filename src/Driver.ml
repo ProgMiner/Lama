@@ -201,7 +201,6 @@ let[@ocaml.warning "-32"] main =
         | `BC -> SM.ByteCode.compile cmd (SM.compile cmd prog)
         | `TC ->
             let module T = Typing in
-            let module S = Solver in
 
             let prog' = T.Expr.from_language @@ snd prog in
 
@@ -212,57 +211,68 @@ let[@ocaml.warning "-32"] main =
                 ; "write", `Arrow (T.Type.IS.empty, [], [`Int], `Int)
                 ; "length", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1]
-                    , [`Match (`Name 1, [`Boxed])]
-                    , [`Name 1]
+                    , [`Match (`GVar 1, [`Boxed])]
+                    , [`GVar 1]
                     , `Int
                     )
                 ; "string", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1]
                     , []
-                    , [`Name 1]
+                    , [`GVar 1]
                     , `String
                     )
                 ; "fix", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1; 2]
-                    , [`Call (`Name 1, [`Name 2], `Name 2)]
-                    , [`Name 1]
-                    , `Name 2
+                    , [`Call (`GVar 1, [`GVar 2], `GVar 2)]
+                    , [`GVar 1]
+                    , `GVar 2
                     )
                 ] in
 
-            let infer = T.Type.make_infer () in
-            let c, t = infer#term ctx prog' in
+            begin try
+                let infer = T.Type.infer () in
+                let c, t = infer#term ctx prog' in
 
-            print_endline @@ GT.show GT.list T.Type.show_c c ;
-            print_endline @@ T.Type.show_t t ;
+                print_endline @@ GT.show GT.list T.Type.show_c c ;
+                print_endline @@ T.Type.show_t t ;
 
-            let c, s = infer#simplify T.Type.IS.empty c in
-            let t = T.Type.subst_t (T.Type.subst_map_to_fun s) T.Type.IS.empty t in
+                let simplify = infer#simplify 0 in
+                let T.Type.Simpl.{ s; r = c } = simplify#run @@ simplify#full c in
+                let t = (T.Type.apply_subst s)#t T.Type.IS.empty t in
 
-            print_endline "After simplify:" ;
-            print_endline @@ GT.show GT.list T.Type.show_c c ;
-            print_endline @@ T.Type.show_t t ;
+                print_endline "After simplify:" ;
+                print_endline @@ GT.show GT.list T.Type.show_c c ;
+                print_endline @@ T.Type.show_t t ;
 
-            let subst = S.solve c in
+                (*
+                print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
+                    let t = T.Type.show_t t in
+                    if acc = ""
+                    then Printf.sprintf "tv_%d -> %s" v t
+                    else Printf.sprintf "%s; tv_%d -> %s" acc v t
+                ) subst "" ^ " }";
+                *)
 
-            print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
-                let t = T.Type.show_t t in
-                if acc = ""
-                then Printf.sprintf "tv_%d -> %s" v t
-                else Printf.sprintf "%s; tv_%d -> %s" acc v t
-            ) subst "" ^ " }";
+                print_endline "Result:" ;
+                print_endline @@ GT.show GT.list T.Type.show_c c ;
+                print_endline @@ T.Type.show_t t
+            with T.Type.Simpl.Failure err ->
+                let open T.Type.Simpl in
 
-            let subst v = match S.Subst.find_opt v subst with
-            | None -> Printf.printf "variable %d wasn't solved!\n" v ; `Name v
-            | Some t -> t
-            in
+                let rec print_err ind = function
+                | Nested errs ->
+                    Printf.printf "%s- nested errors:\n" ind ;
+                    List.iter (print_err @@ ind ^ "  ") errs
 
-            let c = List.map (T.Type.subst_c subst T.Type.IS.empty) c in
-            let t = T.Type.subst_t subst T.Type.IS.empty t in
+                | Unification (t1, t2) ->
+                    Printf.printf "%s- unable to unify types:\n" ind ;
+                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t t1 ;
+                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t t2 ;
+                in
 
-            print_endline "Result:" ;
-            print_endline @@ GT.show GT.list T.Type.show_c c ;
-            print_endline @@ T.Type.show_t t
+                print_endline "Type inference failed:" ;
+                print_err "" err
+            end
         | _ ->
             let rec read acc =
               try
