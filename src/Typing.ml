@@ -158,44 +158,55 @@ module Type = struct
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (GT.show list show_p ps)
 
-    (* free type variables *)
+    (* free logic type variables *)
 
-    let rec ftv_t bvs fvs : t -> _ = function
-    | `GVar x -> if IS.mem x bvs then fvs else failwith "ftv_t: free ground variable"
-    | `LVar (x, _) -> if IS.mem x bvs then failwith "ftv_t: bound logic variable" else IS.add x fvs
-    | `Int -> fvs
-    | `String -> fvs
-    | `Array t -> ftv_t bvs fvs t
-    | `Sexp xs -> ftv_sexp bvs fvs xs
+    let free_lvars p =
+        let rec ftv_t bvs fvs : t -> _ = function
+        | `GVar x -> if IS.mem x bvs then fvs else failwith "free_lvars: free ground variable"
+        | `LVar (x, l) ->
+            if IS.mem x bvs then failwith "free_lvars: bound logic variable" ;
+            if p l then IS.add x fvs else fvs
 
-    | `Arrow (xs, c, ts, t) ->
-        let bvs = IS.union bvs xs in
-        ftv_t bvs (List.fold_left (ftv_t bvs) (List.fold_left (ftv_c bvs) fvs c) ts) t
+        | `Int -> fvs
+        | `String -> fvs
+        | `Array t -> ftv_t bvs fvs t
+        | `Sexp xs -> ftv_sexp bvs fvs xs
 
-    | `Mu (x, t) -> ftv_t (IS.add x bvs) fvs t
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            ftv_t bvs (List.fold_left (ftv_t bvs) (List.fold_left (ftv_c bvs) fvs c) ts) t
 
-    and ftv_sexp bvs fvs ((xs, _) : sexp) =
-        SexpConstructors.fold (fun _ ts fvs -> List.fold_left (ftv_t bvs) fvs ts) xs fvs
+        | `Mu (x, t) -> ftv_t (IS.add x bvs) fvs t
 
-    and ftv_p bvs fvs : p -> _ = function
-    | `Wildcard -> fvs
-    | `Typed (t, p) -> ftv_p bvs (ftv_t bvs fvs t) p
-    | `Array ps -> List.fold_left (ftv_p bvs) fvs ps
-    | `Sexp (_, ps) -> List.fold_left (ftv_p bvs) fvs ps
-    | `Boxed -> fvs
-    | `Unboxed -> fvs
-    | `StringTag -> fvs
-    | `ArrayTag -> fvs
-    | `SexpTag -> fvs
-    | `FunTag -> fvs
+        and ftv_sexp bvs fvs ((xs, _) : sexp) =
+            SexpConstructors.fold (fun _ ts fvs -> List.fold_left (ftv_t bvs) fvs ts) xs fvs
 
-    and ftv_c bvs fvs : c -> _ = function
-    | `Eq (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
-    | `Ind (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
-    | `Call (t, ts, t') -> ftv_t bvs (List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts) t'
-    | `Match (t, ps) -> List.fold_left (ftv_p bvs) (ftv_t bvs fvs t) ps
+        and ftv_p bvs fvs : p -> _ = function
+        | `Wildcard -> fvs
+        | `Typed (t, p) -> ftv_p bvs (ftv_t bvs fvs t) p
+        | `Array ps -> List.fold_left (ftv_p bvs) fvs ps
+        | `Sexp (_, ps) -> List.fold_left (ftv_p bvs) fvs ps
+        | `Boxed -> fvs
+        | `Unboxed -> fvs
+        | `StringTag -> fvs
+        | `ArrayTag -> fvs
+        | `SexpTag -> fvs
+        | `FunTag -> fvs
 
-    let ftv_context ctx = Context.fold (fun _ t fvs -> ftv_t IS.empty fvs t) ctx IS.empty
+        and ftv_c bvs fvs : c -> _ = function
+        | `Eq (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
+        | `Ind (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
+        | `Call (t, ts, t') -> ftv_t bvs (List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts) t'
+        | `Match (t, ps) -> List.fold_left (ftv_p bvs) (ftv_t bvs fvs t) ps
+        in
+
+        object
+
+            method t = ftv_t
+            method sexp = ftv_sexp
+            method p = ftv_p
+            method c = ftv_c
+        end
 
     (* substitution *)
 
@@ -308,7 +319,7 @@ module Type = struct
             method c = subst_c
         end
 
-    exception Unification_failure of string
+    exception Unification_failure of t * t
 
     (* unification, returns substitution and residual equations *)
 
@@ -320,13 +331,13 @@ module Type = struct
             idx
         in
 
-        let module SF = struct
+        let module Mut = struct
 
             type x = Subst.t * (t * t) list
             type t = x -> x
         end in
 
-        let rec unify_t : t * t -> SF.t = function
+        let rec unify_t : t * t -> Mut.t = function
 
         (* === lowlevel var vs lowlevel var === *)
 
@@ -379,10 +390,9 @@ module Type = struct
         | `Sexp xs1, `Sexp xs2 -> unify_sexp (xs1, xs2)
         | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) -> failwith "TODO: unify arrows"
         | `Mu (x1, t1), `Mu (x2, t2) -> failwith "TODO: unify recursive types"
-        | t1, t2 -> raise @@ Unification_failure (Printf.sprintf
-            "unable to unify type \"%s\" with \"%s\"" (show_t t1) (show_t t2))
+        | t1, t2 -> raise @@ Unification_failure (t1, t2)
 
-        and unify_sexp ((xs1, row1), (xs2, row2)) : SF.t =
+        and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
             let xs1'empty = SexpConstructors.is_empty xs1 in
             let xs2'empty = SexpConstructors.is_empty xs2 in
 
@@ -443,7 +453,88 @@ module Type = struct
             method sexp = unify_sexp
         end
 
-    (* make inferrer *)
+    (* constraints simplifier *)
+
+    module Simpl = struct
+
+        type st = {
+
+            s: Subst.t;
+            r: c list;
+        }
+
+        type unsat =
+        | Nested of unsat list
+        | Unification of t * t
+
+        exception Unsat of unsat
+    end
+
+    let simplify var_gen level =
+        let open Simpl in
+
+        let unify = unify var_gen level in
+
+        let single_step deterministic st : c -> (c list * st) list = function
+        | `Eq (t1, t2) -> begin try
+            let s, r = unify#t (t1, t2) (st.s, []) in
+
+            let r = List.map (fun (t1, t2) -> `Eq (t1, t2)) r in
+            [[], { s = s; r = r @ st.r }]
+
+            with Unification_failure (t1, t2) -> raise @@ Unsat (Unification (t1, t2))
+            end
+
+        | c -> failwith @@ "TODO " ^ show_c c
+        in
+
+        let one_step deterministic st =
+            let rec hlp cs' : c list -> (c list * st) list = function
+            | [] -> []
+            | c :: cs ->
+                let xs = single_step deterministic st c in
+
+                if xs = []
+                then hlp (c :: cs') cs
+                else List.map (fun (new_cs, st) -> List.rev cs' @ new_cs @ cs, st) xs
+            in
+
+            hlp []
+        in
+
+        let one_step ?(deterministic=false) cs st = one_step deterministic st cs in
+
+        let rec full_deterministic cs st : c list * st =
+            match one_step ~deterministic:true cs st with
+            | [] -> cs, st
+            | [cs, st] -> full_deterministic cs st
+            | _ -> failwith "BUG: non-deterministic solution"
+        in
+
+        let rec full cs st : st =
+            let cs, st = full_deterministic cs st in
+            if cs = [] then st else full' [] @@ one_step cs st
+
+        and full' errs = function
+        | [] ->
+            if errs = [] then failwith "BUG: no solutions" ;
+            raise @@ Unsat (Nested errs)
+
+        | (cs, st) :: xs ->
+            try full cs st
+            with Unsat err -> full' (err :: errs) xs
+        in
+
+        object
+
+            method full_deterministic = full_deterministic
+            method full = full
+
+            method run : 'a. ?s : Subst.t -> (st -> 'a) -> 'a =
+                fun ?(s=Subst.empty) f -> f { s = s; r = [] }
+        end
+
+    (* type inferrer *)
 
     let make_infer () =
         let module E = Expr in
@@ -529,34 +620,73 @@ module Type = struct
         | E.Int _ -> [], `Int
         | E.String _ -> [], `String
         | E.Lambda (xs, b) ->
-            (* here we generate variables for parameters on special level `k`
-             * next we infer type of body on lower level (`k + 1`)
+            (* here we generate variables for parameters on special level `k` *)
+
+            current_level := !current_level + 1 ;
+
+            let xts = List.map (fun x -> x, new_tv ()) xs in
+
+            (* next we infer type of body on lower level (`k + 1`)
              * and simplify them on this level
-             *
-             * after that we have residual constraints and substitution
-             * we apply substitution and split residuals by having variables on level `k` in them
-             * it is must be guaranteed that no variables on lower levels exist
-             *
-             * on last step we need to perform non-abigious simplification on level `k`
-             * to eliminate obvious constraints
              *)
 
-            (*
-            let xts = List.map (fun x -> x, new_tv ()) xs in
+            current_level := !current_level + 1 ;
+
             let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
             let c, t = infer ctx' b in
 
-            let c, s = simplify (ftv_context ctx) c in
+            let Simpl.{ s; r = c } =
+                let simplify = simplify prev_var_idx !current_level in
+                simplify#run @@ simplify#full c
+            in
 
-            let subst_t' = (apply_subst s)#t IS.empty in
-            let fvs = ftv_context @@ Context.map subst_t' ctx in
-            let ts = List.map subst_t' @@ List.map snd xts in
-            let t = subst_t' t in
+            (* after that we have residual constraints and substitution
+             *
+             * we perform deterministic simplification on level `k`
+             * to eliminate obvious constraints
+             *
+             * note that if we do non-deterministic simplification here,
+             * we will get overspecialized solution
+             *)
 
-            let signature_tvs = List.fold_left (Fun.flip ftv_t) (ftv_t t IS.empty IS.empty) ts in
-            let bvs, bc, fc = split_c signature_tvs fvs c in
+            current_level := !current_level - 1 ;
+
+            let bc, Simpl.{ s; r = fc } =
+                let simplify = simplify prev_var_idx !current_level in
+                simplify#run ~s @@ simplify#full_deterministic c
+            in
+
+            (* now we have two kinds of residual constraints:
+             * "true" residual constraints are free since we unable to solve them on level `k`,
+             * other returned constraints are bound since we unable to solve them deterministically
+             *
+             * we apply substitution and collect free variables on level `k` as bound
+             *
+             * it is must be guaranteed that no variables on lower levels exist
+             *)
+
+            let apply_subst = apply_subst s in
+            let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
+            let bc = List.map (apply_subst#c IS.empty) bc in
+            let t = apply_subst#t IS.empty t in
+
+            let bvs =
+                let level = !current_level in
+                let free_lvars = free_lvars @@ fun l -> l = level in
+
+                let fvs = IS.empty in
+                let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
+                let fvs = List.fold_left (free_lvars#c IS.empty) fvs bc in
+                let fvs = free_lvars#t IS.empty fvs t in
+                fvs
+            in
+
+            (* to build result type, we need to convert bound variables to ground *)
+
+            (*
             fc, `Arrow (bvs, bc, ts, t)
             *)
+
             failwith "TODO"
 
         | E.Skip -> [], new_tv ()

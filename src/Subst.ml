@@ -10,6 +10,8 @@ module Make(T : Term) : sig
 
     exception Need_unification of T.t * T.t
 
+    val empty: t
+
     val find: int -> t -> T.t option
 
     val bind_vars: int -> int -> t -> t
@@ -35,6 +37,8 @@ end = struct
     }
 
     exception Need_unification of T.t * T.t
+
+    let empty = { nodes = IntMap.empty }
 
     let rec find_internal v s = match IntMap.find_opt v s.nodes with
     | None -> v, None
