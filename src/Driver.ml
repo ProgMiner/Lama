@@ -203,7 +203,6 @@ let[@ocaml.warning "-32"] main =
             let module T = Typing in
 
             let prog' = T.Expr.from_language @@ snd prog in
-
             print_endline @@ T.Expr.show_t prog' ;
 
             let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
@@ -229,16 +228,31 @@ let[@ocaml.warning "-32"] main =
                     )
                 ] in
 
+            let print_decls decls =
+                let rec f indent (x, t, inner) =
+                    Printf.printf "%s- %s : %s\n" indent x @@ T.Type.show_t t ;
+                    List.iter (f @@ indent ^ "  ") inner
+                in
+
+                List.iter (f "") decls
+            in
+
+            let print_pub_decls decls =
+                let f x t = Printf.printf "- %s : %s\n" x (T.Type.show_t t) in
+                T.Type.Context.iter f decls
+            in
+
             begin try
                 let infer = T.Type.infer () in
-                let c, t = infer#term ctx prog' in
+                let c, _ = infer#term ctx prog' in
+                let decls = infer#all_decls () in
 
+                print_endline "Inferred constraints:" ;
                 print_endline @@ GT.show GT.list T.Type.show_c c ;
-                print_endline @@ T.Type.show_t t ;
+                print_decls decls ;
 
                 let simplify = infer#simplify 0 in
                 let T.Type.Simpl.{ s; r = c } = simplify#run @@ simplify#full c in
-                let t = (T.Type.apply_subst s)#t T.Type.IS.empty t in
 
                 (*
                 print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
@@ -251,10 +265,22 @@ let[@ocaml.warning "-32"] main =
 
                 if c <> [] then failwith "BUG: simplify on level 0 returned residuals" ;
 
+                let decls =
+                    let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in
+                    let rec f (x, t, inner) = x, apply_subst t, List.map f inner in
+                    List.map f decls
+                in
+
                 (* TODO monomorphize free variables *)
 
                 print_endline "Result:" ;
-                print_endline @@ T.Type.show_t t
+                print_decls decls ;
+
+                let decls = infer#public_names () in
+                let decls = T.Type.Context.map ((T.Type.apply_subst s)#t T.Type.IS.empty) decls in
+                print_endline "Public declarations:" ;
+                print_pub_decls decls ;
+
             with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in
 

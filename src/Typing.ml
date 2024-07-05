@@ -5,6 +5,8 @@ module Pattern = Language.Pattern
 
 module Expr = struct
 
+    (* TODO: record position and names in expr *)
+
     @type t =
     | Scope     of decl list * t    (* scope expression *)
     | Seq       of t * t            (* sequence point *)
@@ -25,13 +27,17 @@ module Expr = struct
     | Case      of t * (Pattern.t * t) list (* case-of *)
 
     and decl =
-    | Var of string * t
-    | Fun of string * string list * t
+    | Var of bool * string * t
+    | Fun of bool * string * string list * t
     with show, eval
 
     let decl_name = function
-    | Var (x, _) -> x
-    | Fun (x, _, _) -> x
+    | Var (_, x, _) -> x
+    | Fun (_, x, _, _) -> x
+
+    let is_public = function
+    | `Public | `PublicExtern -> true
+    | _ -> false
 
     module L = Language.Expr
 
@@ -64,9 +70,9 @@ module Expr = struct
     | L.Control _ -> invalid_arg "Control"
 
     and decl_from_language = function
-    | x, (_, `Fun      (xs,  t)) -> Fun (x, xs, from_language t)
-    | x, (_, `Variable  None   ) -> Var (x, Int 0)
-    | x, (_, `Variable (Some t)) -> Var (x, from_language t)
+    | x, (q, `Fun      (xs,  t)) -> Fun (is_public q, x, xs, from_language t)
+    | x, (q, `Variable  None   ) -> Var (is_public q, x, Int 0)
+    | x, (q, `Variable (Some t)) -> Var (is_public q, x, from_language t)
 end
 
 module Type = struct
@@ -117,6 +123,8 @@ module Type = struct
     | `Call     of t * t list * t   (* callable with args and result types *)
     | `Match    of t * p list       (* match type with patterns *)
     ]
+
+    (* TODO: add type of constraint with metainfo *)
 
     let show_is is = match IS.elements is with
     | i :: is -> (List.fold_left (Printf.sprintf "%s, %d") (Printf.sprintf "{%d" i) is) ^ "}"
@@ -603,6 +611,8 @@ module Type = struct
         | Nested of fail list
         | Unification of t * t
 
+        (* TODO: record position of error in source code *)
+
         exception Failure of fail
     end
 
@@ -654,6 +664,8 @@ module Type = struct
         and full' errs = function
         | [] ->
             if errs = [] then failwith "BUG: no solutions" ;
+
+            (* TODO: record position of assumption (from non-deterministic one_step) *)
             raise @@ Failure (Nested errs)
 
         | (cs, st) :: xs ->
@@ -672,11 +684,16 @@ module Type = struct
 
     (* type inferrer *)
 
+    type decl_type = string * t * decl_type list
+
     let infer () =
         let module E = Expr in
 
         let prev_var_idx = Stdlib.ref 0 in
         let current_level = Stdlib.ref 0 in
+
+        let public_names = Stdlib.ref Context.empty in
+        let current_decls = Stdlib.ref [] in
 
         let new_var () =
             let idx = !prev_var_idx + 1 in
@@ -721,6 +738,9 @@ module Type = struct
         | E.Scope (ds, e) ->
             let c1, ctx = infer_decls ctx ds in
             let c2, t = infer_t ctx e in
+
+            current_decls := List.rev !current_decls ;
+
             c1 @ c2, t
 
         | E.Seq (l, r) ->
@@ -831,6 +851,12 @@ module Type = struct
                 bc, ts, t
             in
 
+            (* since we discard substitution, apply it on debug info *)
+            begin
+                let rec f (x, t, inner) = x, apply_subst#t IS.empty t, List.map f inner in
+                current_decls := List.map f !current_decls
+            end ;
+
             fc, `Arrow (bvs, bc, ts, t)
 
         | E.Skip -> [], new_tv ()
@@ -878,11 +904,21 @@ module Type = struct
             `Match (t, List.rev ps) :: c, s
 
         and infer_decl ctx = function
-        | E.Var (x, v) ->
+        | E.Var (pub, x, v) ->
+            let t' = Context.find x ctx in
+
+            if pub then public_names := Context.add x t' !public_names ;
+
+            let old_decls = !current_decls in
+            current_decls := [] ;
+
             let c, t = infer_t ctx v in
+
+            current_decls := (x, t', !current_decls) :: old_decls ;
+
             `Eq (Context.find x ctx, t) :: c
 
-        | E.Fun (x, xs, b) -> infer_decl ctx @@ E.Var (x, E.Lambda (xs, b))
+        | E.Fun (pub, x, xs, b) -> infer_decl ctx @@ E.Var (pub, x, E.Lambda (xs, b))
 
         and infer_decls ctx ds =
             let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
@@ -900,5 +936,8 @@ module Type = struct
             method decls = infer_decls
 
             method simplify = simplify prev_var_idx
+
+            method public_names () = !public_names
+            method all_decls () = !current_decls
         end
 end
