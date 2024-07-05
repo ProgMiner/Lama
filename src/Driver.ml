@@ -205,6 +205,8 @@ let[@ocaml.warning "-32"] main =
             let prog' = T.Expr.from_language @@ snd prog in
             print_endline @@ T.Expr.show_t prog' ;
 
+            (* TODO: load type interface files for imported modules *)
+
             let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
                 [ "read", `Arrow (T.Type.IS.empty, [], [], `Int)
                 ; "write", `Arrow (T.Type.IS.empty, [], [`Int], `Int)
@@ -219,12 +221,6 @@ let[@ocaml.warning "-32"] main =
                     , []
                     , [`GVar 1]
                     , `String
-                    )
-                ; "fix", `Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [1; 2]
-                    , [`Call (`GVar 1, [`GVar 2], `GVar 2)]
-                    , [`GVar 1]
-                    , `GVar 2
                     )
                 ] in
 
@@ -265,21 +261,26 @@ let[@ocaml.warning "-32"] main =
 
                 if c <> [] then failwith "BUG: simplify on level 0 returned residuals" ;
 
-                let decls =
+                let finish_types =
+                    let monomorphize = (T.Type.monomorphize `Int)#t T.Type.IS.empty in
                     let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in
-                    let rec f (x, t, inner) = x, apply_subst t, List.map f inner in
-                    List.map f decls
+                    fun t -> monomorphize @@ apply_subst t
                 in
 
-                (* TODO monomorphize free variables *)
+                let decls =
+                    let rec hlp (x, t, inner) = x, finish_types t, List.map hlp inner in
+                    List.map hlp decls
+                in
 
                 print_endline "Result:" ;
                 print_decls decls ;
 
                 let decls = infer#public_names () in
-                let decls = T.Type.Context.map ((T.Type.apply_subst s)#t T.Type.IS.empty) decls in
+                let decls = T.Type.Context.map finish_types decls in
                 print_endline "Public declarations:" ;
                 print_pub_decls decls ;
+
+                (* TODO: save typed interface file for modularity *)
 
             with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in

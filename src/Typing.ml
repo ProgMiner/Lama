@@ -242,7 +242,7 @@ module Type = struct
         | `Mu (x, t) -> `Mu (x, ltog_t bvs t)
 
         and ltog_sexp bvs ((xs, row) : sexp) : sexp =
-            (SexpConstructors.map (List.map @@ ltog_t bvs) xs, row)
+            SexpConstructors.map (List.map @@ ltog_t bvs) xs, row
 
         and ltog_p bvs : p -> p = function
         | `Wildcard -> `Wildcard
@@ -857,6 +857,8 @@ module Type = struct
                 current_decls := List.map f !current_decls
             end ;
 
+            (* TODO: think how to bind row variables in polymorphic functions... *)
+
             fc, `Arrow (bvs, bc, ts, t)
 
         | E.Skip -> [], new_tv ()
@@ -939,5 +941,57 @@ module Type = struct
 
             method public_names () = !public_names
             method all_decls () = !current_decls
+        end
+
+    (* monomorphization of all logic variables *)
+
+    let monomorphize placeholder =
+        let rec mono_t bvs : t -> t = function
+        | `GVar x as t ->
+            if not @@ IS.mem x bvs then failwith "monomorphize: free ground variable" ;
+            t
+
+        | `LVar (x, _) ->
+            if IS.mem x bvs then failwith "monomorphize: bound logic variable" ;
+            placeholder
+
+        | `Int -> `Int
+        | `String -> `String
+        | `Array t -> `Array (mono_t bvs t)
+        | `Sexp xs -> `Sexp (mono_sexp bvs xs)
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            `Arrow (xs, List.map (mono_c bvs) c, List.map (mono_t bvs) ts, mono_t bvs t)
+
+        | `Mu (x, t) -> `Mu (x, mono_t bvs t)
+
+        and mono_sexp bvs ((xs, row) : sexp) : sexp =
+            SexpConstructors.map (List.map @@ mono_t bvs) xs, row
+
+        and mono_p bvs : p -> p = function
+        | `Wildcard -> `Wildcard
+        | `Typed (t, p) -> `Typed (mono_t bvs t, mono_p bvs p)
+        | `Array ps -> `Array (List.map (mono_p bvs) ps)
+        | `Sexp (x, ps) -> `Sexp (x, List.map (mono_p bvs) ps)
+        | `Boxed -> `Boxed
+        | `Unboxed -> `Unboxed
+        | `StringTag -> `StringTag
+        | `ArrayTag -> `ArrayTag
+        | `SexpTag -> `SexpTag
+        | `FunTag -> `FunTag
+
+        and mono_c bvs : c -> c = function
+        | `Eq (t1, t2) -> `Eq (mono_t bvs t1, mono_t bvs t2)
+        | `Ind (t1, t2) -> `Ind (mono_t bvs t1, mono_t bvs t2)
+        | `Call (t, ts, t') -> `Call (mono_t bvs t, List.map (mono_t bvs) ts, mono_t bvs t')
+        | `Match (t, ps) -> `Match (mono_t bvs t, List.map (mono_p bvs) ps)
+        in
+
+        object
+
+            method t = mono_t
+            method sexp = mono_sexp
+            method p = mono_p
+            method c = mono_c
         end
 end
