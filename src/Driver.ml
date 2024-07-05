@@ -240,10 +240,6 @@ let[@ocaml.warning "-32"] main =
                 let T.Type.Simpl.{ s; r = c } = simplify#run @@ simplify#full c in
                 let t = (T.Type.apply_subst s)#t T.Type.IS.empty t in
 
-                print_endline "After simplify:" ;
-                print_endline @@ GT.show GT.list T.Type.show_c c ;
-                print_endline @@ T.Type.show_t t ;
-
                 (*
                 print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
                     let t = T.Type.show_t t in
@@ -253,8 +249,11 @@ let[@ocaml.warning "-32"] main =
                 ) subst "" ^ " }";
                 *)
 
+                if c <> [] then failwith "BUG: simplify on level 0 returned residuals" ;
+
+                (* TODO monomorphize free variables *)
+
                 print_endline "Result:" ;
-                print_endline @@ GT.show GT.list T.Type.show_c c ;
                 print_endline @@ T.Type.show_t t
             with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in

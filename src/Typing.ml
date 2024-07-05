@@ -279,7 +279,7 @@ module Type = struct
 
         let unpack_sexp = function
         | Sexp t -> t
-        | _ -> failwith "unpack_type: not a row variable"
+        | _ -> failwith "unpack_sexp: not a row variable"
 
         let find_type x s = Option.map unpack_type @@ find x s
         let find_sexp x s = Option.map unpack_sexp @@ find x s
@@ -298,20 +298,22 @@ module Type = struct
             if not @@ IS.mem x bvs then failwith "apply_subst: free ground variable" ;
             t
 
-        | `LVar (x, _) as t ->
+        | `LVar (x, l) ->
             if IS.mem x bvs then failwith "apply_subst: bound logic variable" ;
 
             let old_vars_path = !vars_path in
 
-            if IM.mem x old_vars_path
-            then begin
+            if IM.mem x old_vars_path then begin
                 (* variable `x` is recursive *)
                 vars_path := IM.add x true old_vars_path ;
                 `GVar x
 
             end else begin
                 match Subst.find_type x s with
-                | None -> t
+                | None ->
+                    (* here level may be wrong if substitution applied on several levels! *)
+                    `LVar (Subst.find_var x s, l)
+
                 | Some t ->
                     vars_path := IM.add x false old_vars_path ;
 
@@ -342,7 +344,7 @@ module Type = struct
             match Subst.find_sexp row s with
             | None -> xs, row
             | Some (xs', row') -> 
-                let f _ _ _ = failwith "subst_sexp: intersecting constructors" in
+                let f _ _ _ = failwith "apply_subst: intersecting constructors in S-exp" in
                 let xs = SexpConstructors.union f xs xs' in
 
                 subst_sexp bvs (xs, row')
@@ -374,9 +376,86 @@ module Type = struct
             method c = subst_c
         end
 
-    exception Unification_failure of t * t
+    (* lift unbound logic variables from lower levels to `k` *)
+
+    let lift_lvars var_gen level =
+        let new_var () =
+            let idx = !var_gen + 1 in
+            var_gen := idx ;
+
+            idx
+        in
+
+        let module Mut = struct
+
+            type t = Subst.t -> Subst.t
+        end in
+
+        let rec lift_t bvs : t -> Mut.t = function
+        | `GVar x ->
+            if not @@ IS.mem x bvs then failwith "lift_lvars: free ground variable" ;
+            Fun.id
+
+        | `LVar (x, l) ->
+            if IS.mem x bvs then failwith "lift_lvars: bound logic variable" ;
+
+            if l <= level then Fun.id else fun s ->
+                begin match Subst.find_type x s with
+                | None -> let x' = new_var () in Subst.bind_type x (`LVar (x', level)) s
+                | Some t -> lift_t bvs t s
+                end
+
+        | `Int -> Fun.id
+        | `String -> Fun.id
+        | `Array t -> lift_t bvs t
+        | `Sexp xs -> lift_sexp bvs xs
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in fun s ->
+                let s = List.fold_left (Fun.flip @@ lift_c bvs) s c in
+                let s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
+                let s = lift_t bvs t s in
+                s
+
+        | `Mu (x, t) -> lift_t (IS.add x bvs) t
+
+        and lift_sexp bvs ((xs, _) : sexp) : Mut.t =
+            SexpConstructors.fold (fun _ ts s -> List.fold_left (Fun.flip @@ lift_t bvs) s ts) xs
+
+        and lift_p bvs : p -> Mut.t = function
+        | `Wildcard -> Fun.id
+        | `Typed (t, p) -> fun s -> lift_p bvs p @@ lift_t bvs t s
+        | `Array ps -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) s ps
+        | `Sexp (_, ps) -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) s ps
+        | `Boxed -> Fun.id
+        | `Unboxed -> Fun.id
+        | `StringTag -> Fun.id
+        | `ArrayTag -> Fun.id
+        | `SexpTag -> Fun.id
+        | `FunTag -> Fun.id
+
+        and lift_c bvs : c -> Mut.t = function
+        | `Eq (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
+        | `Ind (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
+        | `Call (t, ts, t') -> fun s ->
+            let s = lift_t bvs t s in
+            let s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
+            let s = lift_t bvs t' s in
+            s
+
+        | `Match (t, ps) -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) (lift_t bvs t s) ps
+        in
+
+        object
+
+            method t = lift_t
+            method sexp = lift_sexp
+            method p = lift_p
+            method c = lift_c
+        end
 
     (* unification, returns substitution and residual equations *)
+
+    exception Unification_failure of t * t
 
     let unify var_gen level =
         let new_var () =
@@ -421,7 +500,7 @@ module Type = struct
             Fun.id
 
         | `LVar (_, l) as t1, (`LVar (_, k) as t2) when l > k -> unify_t (t2, t1)
-        | `LVar (x, l), t ->
+        | `LVar (_, l) as t1, t2 ->
             (*  example: lv_1^0 = [lv_2^1]
              *  result:  lv_1^0 = [lv_3^0] and lv_2^1 |-> lv_3^0
              *
@@ -429,10 +508,12 @@ module Type = struct
              *  and record refreshing in result substitution (lv_2^1 |-> lv_3^0),
              *  as a residual we record refreshed equation (lv_1^0 = [lv_3^0])
              *
-             *  !!! same operation we need to do with all constraints below !!!
+             *  !!! same operation we need to do with all residual constraints below !!!
              *)
 
-            failwith "TODO: deal with lowlevel variables in t"
+            fun (s, r) ->
+                let s = (lift_lvars var_gen l)#t IS.empty t2 s in
+                s, (t1, t2) :: r
 
         | t1, (`LVar (_, _) as t2) -> unify_t (t2, t1)
 
@@ -720,12 +801,16 @@ module Type = struct
 
             let apply_subst = apply_subst s in
             let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
+            let fc = List.map (apply_subst#c IS.empty) fc in
             let bc = List.map (apply_subst#c IS.empty) bc in
             let t = apply_subst#t IS.empty t in
 
             let bvs =
                 let level = !current_level in
                 let free_lvars = free_lvars @@ fun l -> l >= level in
+
+                if not @@ IS.is_empty @@ List.fold_left (free_lvars#c IS.empty) IS.empty fc then
+                    failwith "lowlevel variables in free constraints occurred" ;
 
                 let fvs = IS.empty in
                 let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
