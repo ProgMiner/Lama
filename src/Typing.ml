@@ -102,7 +102,7 @@ module Type = struct
     | `Mu       of int * t          (* mu-type *)
     ]
 
-    and sexp = t list SexpConstructors.t * int
+    and sexp = t list SexpConstructors.t * int option
 
     and p = [
     | `Wildcard
@@ -122,6 +122,7 @@ module Type = struct
     | `Ind      of t * t            (* indexable *)
     | `Call     of t * t list * t   (* callable with args and result types *)
     | `Match    of t * p list       (* match type with patterns *)
+    | `Sexp     of string * t * t list (* type is S-expression *)
     ]
 
     (* TODO: add type of constraint with metainfo *)
@@ -142,11 +143,13 @@ module Type = struct
 
     | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
-    and show_sexp ((xs, row) : sexp) = match List.of_seq @@ SexpConstructors.to_seq xs with
-    | (_ :: _) as xs -> (String.concat " \\/ " @@ List.map
-        (fun ((l, _), ts) -> Printf.sprintf "%s %s" l (GT.show list show_t ts)) xs)
-        ^ Printf.sprintf " \\/ row_%d" row
-    | [] -> Printf.sprintf "row_%d" row
+    and show_sexp ((xs, row) : sexp) =
+        let f ((l, _), ts) = Printf.sprintf "%s %s" l @@ GT.show list show_t ts in
+
+        let xs = List.map f @@ List.of_seq @@ SexpConstructors.to_seq xs in
+        let row = Option.to_list @@ Option.map (Printf.sprintf "row_%d") row in
+
+        String.concat " \\/ " @@ xs @ row
 
     and show_p : p -> _ = function
     | `Wildcard -> "_"
@@ -165,6 +168,7 @@ module Type = struct
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (GT.show list show_p ps)
+    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (GT.show list show_t ts)
 
     (* free logic type variables *)
 
@@ -209,6 +213,7 @@ module Type = struct
         | `Ind (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
         | `Call (t, ts, t') -> ftv_t bvs (List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts) t'
         | `Match (t, ps) -> List.fold_left (ftv_p bvs) (ftv_t bvs fvs t) ps
+        | `Sexp (_, t, ts) -> List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts
         in
 
         object
@@ -261,6 +266,7 @@ module Type = struct
         | `Ind (t1, t2) -> `Ind (ltog_t bvs t1, ltog_t bvs t2)
         | `Call (t, ts, t') -> `Call (ltog_t bvs t, List.map (ltog_t bvs) ts, ltog_t bvs t')
         | `Match (t, ps) -> `Match (ltog_t bvs t, List.map (ltog_p bvs) ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, ltog_t bvs t, List.map (ltog_t bvs) ts)
         in
 
         object
@@ -349,7 +355,7 @@ module Type = struct
         and subst_sexp bvs (xs, row) =
             let xs = SexpConstructors.map (List.map @@ subst_t bvs) xs in
 
-            match Subst.find_sexp row s with
+            match Option.bind row @@ fun row -> Subst.find_sexp row s with
             | None -> xs, row
             | Some (xs', row') -> 
                 let f _ _ _ = failwith "apply_subst: intersecting constructors in S-exp" in
@@ -374,6 +380,7 @@ module Type = struct
         | `Ind (t1, t2) -> `Ind (subst_t bvs t1, subst_t bvs t2)
         | `Call (t, ts, t') -> `Call (subst_t bvs t, List.map (subst_t bvs) ts, subst_t bvs t')
         | `Match (t, ps) -> `Match (subst_t bvs t, List.map (subst_p bvs) ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, subst_t bvs t, List.map (subst_t bvs) ts)
         in
 
         object
@@ -451,6 +458,7 @@ module Type = struct
             s
 
         | `Match (t, ps) -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) (lift_t bvs t s) ps
+        | `Sexp (_, t, ts) -> fun s -> List.fold_left (Fun.flip @@ lift_t bvs) (lift_t bvs t s) ts
         in
 
         object
@@ -463,7 +471,8 @@ module Type = struct
 
     (* unification, returns substitution and residual equations *)
 
-    exception Unification_failure of t * t
+    exception Unification_failure of Subst.t * t * t
+    exception Sexp_unification_failure of Subst.t
 
     let unify var_gen level =
         let new_var () =
@@ -531,22 +540,43 @@ module Type = struct
         | `Int, `Int -> Fun.id
         | `String, `String -> Fun.id
         | `Array t1, `Array t2 -> unify_t (t1, t2)
-        | `Sexp xs1, `Sexp xs2 -> unify_sexp (xs1, xs2)
+        | `Sexp xs1, `Sexp xs2 ->
+            begin try unify_sexp (xs1, xs2)
+            with Sexp_unification_failure s ->
+                raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
+            end
+
         | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) -> failwith "TODO: unify arrows"
         | `Mu (x1, t1), `Mu (x2, t2) -> failwith "TODO: unify recursive types"
-        | t1, t2 -> raise @@ Unification_failure (t1, t2)
+        | t1, t2 -> fun (s, _) -> raise @@ Unification_failure (s, t1, t2)
 
         and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
+            let rec bind_rows s = function
+            | None, None -> s
+            | Some row1, None -> Subst.bind_sexp row1 (SexpConstructors.empty, None) s
+            | None, Some row2 -> bind_rows s (Some row2, None)
+            | Some row1, Some row2 -> Subst.bind_vars row1 row2 s
+            in
+
+            let bind_row_sexp s = function
+            | None, (xs, None) when SexpConstructors.is_empty xs -> s
+            | None, (xs, Some row2) when SexpConstructors.is_empty xs ->
+                bind_rows s (None, Some row2)
+
+            | Some row1, xs -> Subst.bind_sexp row1 xs s
+            | _ -> raise @@ Sexp_unification_failure s
+            in
+
             let xs1'empty = SexpConstructors.is_empty xs1 in
             let xs2'empty = SexpConstructors.is_empty xs2 in
 
             if xs1'empty && xs2'empty then begin fun (s, r) ->
-                try Subst.bind_vars row1 row2 s, r
+                try bind_rows s (row1, row2), r
                 with Subst.Need_unification (t1, t2) ->
                     unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) (s, r)
 
             end else if xs1'empty then begin fun (s, r) ->
-                try Subst.bind_sexp row1 (xs2, row2) s, r
+                try bind_row_sexp s (row1, (xs2, row2)), r
                 with Subst.Need_unification (t1, t2) ->
                     unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) (s, r)
 
@@ -579,8 +609,12 @@ module Type = struct
                 if not xs1_only'empty && not xs2_only'empty then begin
                     let row = new_var () in
 
-                    let row1_f = unify_sexp ((SexpConstructors.empty, row1), (xs2_only, row)) in
-                    let row2_f = unify_sexp ((SexpConstructors.empty, row2), (xs1_only, row)) in
+                    let f row' xs =
+                        unify_sexp ((SexpConstructors.empty, row'), (xs, Some row))
+                    in
+
+                    let row1_f = f row1 xs2_only in
+                    let row2_f = f row2 xs1_only in
 
                     fun s -> row2_f @@ row1_f @@ both_f s
 
@@ -609,7 +643,7 @@ module Type = struct
 
         type fail =
         | Nested of fail list
-        | Unification of t * t
+        | Unification of Subst.t * t * t
 
         (* TODO: record position of error in source code *)
 
@@ -628,7 +662,7 @@ module Type = struct
             let r = List.map (fun (t1, t2) -> `Eq (t1, t2)) r in
             [[], { s = s; r = r @ st.r }]
 
-            with Unification_failure (t1, t2) -> raise @@ Failure (Unification (t1, t2))
+            with Unification_failure (s, t1, t2) -> raise @@ Failure (Unification (s, t1, t2))
             end
 
         | c -> failwith @@ "TODO " ^ show_c c
@@ -857,8 +891,6 @@ module Type = struct
                 current_decls := List.map f !current_decls
             end ;
 
-            (* TODO: think how to bind row variables in polymorphic functions... *)
-
             fc, `Arrow (bvs, bc, ts, t)
 
         | E.Skip -> [], new_tv ()
@@ -873,8 +905,7 @@ module Type = struct
             let c = List.fold_left (fun c (c', _) -> c @ c') [] css in
 
             let t = new_tv () in
-            let xs = SexpConstructors.singleton (x, List.length xs) @@ List.map snd css in
-            `Eq (t, `Sexp (xs, new_var ())) :: c, t
+            `Sexp (x, t, List.map snd css) :: c, t
 
         | E.If (c, t, f) ->
             let c1, _ = infer_t ctx c in
@@ -965,8 +996,8 @@ module Type = struct
 
         | `Mu (x, t) -> `Mu (x, mono_t bvs t)
 
-        and mono_sexp bvs ((xs, row) : sexp) : sexp =
-            SexpConstructors.map (List.map @@ mono_t bvs) xs, row
+        and mono_sexp bvs ((xs, _) : sexp) : sexp =
+            SexpConstructors.map (List.map @@ mono_t bvs) xs, None
 
         and mono_p bvs : p -> p = function
         | `Wildcard -> `Wildcard
@@ -985,6 +1016,7 @@ module Type = struct
         | `Ind (t1, t2) -> `Ind (mono_t bvs t1, mono_t bvs t2)
         | `Call (t, ts, t') -> `Call (mono_t bvs t, List.map (mono_t bvs) ts, mono_t bvs t')
         | `Match (t, ps) -> `Match (mono_t bvs t, List.map (mono_p bvs) ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, mono_t bvs t, List.map (mono_t bvs) ts)
         in
 
         object

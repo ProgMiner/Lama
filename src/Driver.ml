@@ -290,10 +290,12 @@ let[@ocaml.warning "-32"] main =
                     Printf.printf "%s- nested errors:\n" ind ;
                     List.iter (print_err @@ ind ^ "  ") errs
 
-                | Unification (t1, t2) ->
+                | Unification (s, t1, t2) ->
+                    let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in
+
                     Printf.printf "%s- unable to unify types:\n" ind ;
-                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t t1 ;
-                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t t2 ;
+                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t1 ;
+                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
                 in
 
                 print_endline "Type inference failed:" ;
