@@ -150,7 +150,7 @@ module Type = struct
         path : string list;
         pos : Expr.position;
 
-        parent : c_info option;
+        parents : c list;
     }
 
     type c_aux = c * c_info
@@ -275,7 +275,7 @@ module Type = struct
             let bvs = IS.union bvs xs in
             `Arrow (xs, List.map (ltog_c bvs) c, List.map (ltog_t bvs) ts, ltog_t bvs t)
 
-        | `Mu (x, t) -> `Mu (x, ltog_t bvs t)
+        | `Mu (x, t) -> `Mu (x, ltog_t (IS.add x bvs) t)
 
         and ltog_sexp bvs ((xs, row) : sexp) : sexp =
             SexpConstructors.map (List.map @@ ltog_t bvs) xs, row
@@ -388,7 +388,7 @@ module Type = struct
 
             match Option.bind row @@ fun row -> Subst.find_sexp row s with
             | None -> xs, row
-            | Some (xs', row') -> 
+            | Some (xs', row') ->
                 let f _ _ _ = failwith "apply_subst: intersecting constructors in S-exp" in
                 let xs = SexpConstructors.union f xs xs' in
 
@@ -674,9 +674,10 @@ module Type = struct
 
         type fail =
         | Nested of fail list
-        | Unification of Subst.t * t * t
+        | Unification of t * t
+        | NotIndexable of t
 
-        exception Failure of fail * c_info
+        exception Failure of fail * c_aux * Subst.t
     end
 
     let simplify var_gen level =
@@ -684,55 +685,95 @@ module Type = struct
 
         let unify = unify var_gen level in
 
-        let single_step deterministic st (c, inf : c_aux) : (c_aux list * st) list = match c with
-        | `Eq (t1, t2) -> begin try
-            let s, r = unify#t (t1, t2) (st.s, []) in
-
-            let r = List.map (fun (t1, t2) -> `Eq (t1, t2), inf ) r in
-            [[], { s = s; r = r @ st.r }]
-
-            with Unification_failure (s, t1, t2) -> raise @@ Failure (Unification (s, t1, t2), inf)
+        (* shaps = SHallow APply Substitution *)
+        let shaps s = function
+        | `LVar (x, _) as t ->
+            begin match Subst.find_type x s with
+            | Some t -> t
+            | None -> t
             end
 
-        | c -> failwith @@ "TODO " ^ show_c c
+        | t -> t
         in
 
-        let one_step deterministic st =
-            let rec hlp cs' : c_aux list -> (c_aux list * st) list * c_info = function
-            | [] -> [], { path = [] ; pos = { row = 0 ; col = 0 } ; parent = None }
-            | c :: cs ->
-                let xs = single_step deterministic st c in
+        let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
+            match c with
+            | `Eq (t1, t2) -> begin try
+                let s, r = unify#t (t1, t2) (st.s, []) in
 
-                if xs = []
-                then hlp (c :: cs') cs
-                else List.map (fun (new_cs, st) -> List.rev cs' @ new_cs @ cs, st) xs, snd c
+                let r = List.map (fun (t1, t2) -> `Eq (t1, t2), inf ) r in
+                Some ([], { s = s; r = r @ st.r })
+
+                with Unification_failure (s, t1, t2) ->
+                    raise @@ Failure (Unification (t1, t2), c_aux, s)
+                end
+
+            | `Ind (t1, t2) ->
+                begin match shaps st.s t1 with
+                | `LVar _ -> None
+                | `String -> Some ([`Eq (t2, `Int)], st)
+                | `Array t1 -> Some ([`Eq (t1, t2)], st)
+                | `Sexp _ -> failwith "TODO: Ind(Sexp)"
+                | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
+                end
+
+            | c -> failwith @@ "TODO " ^ show_c c
+        in
+
+        let single_step_nondet st (c, inf : c_aux) : (c list * st) list = match c with
+        | _ -> Option.to_list @@ single_step_det st (c, inf)
+        in
+
+        let one_step_f cs' cs (c, inf : c_aux) (new_cs, st) =
+            let f c' = c', { inf with parents = c :: inf.parents } in
+            List.rev cs' @ List.map f new_cs @ cs, st
+        in
+
+        let one_step_nondet st =
+            let rec hlp cs' : c_aux list -> (c_aux list * st) list * c_aux = function
+            | [] -> failwith "BUG: no solutions" ;
+            | c :: cs ->
+                match single_step_nondet st c with
+                | [] -> hlp (c :: cs') cs
+                | xs -> List.map (one_step_f cs' cs c) xs, c
             in
 
             hlp []
         in
 
-        let one_step ?(deterministic=false) cs st = one_step deterministic st cs in
+        let one_step_nondet cs st = one_step_nondet st cs in
+
+        let one_step_det st =
+            let rec hlp cs' : c_aux list -> (c_aux list * st) option = function
+            | [] -> None
+            | c :: cs ->
+                match single_step_det st c with
+                | Some res -> Some (one_step_f cs' cs c res)
+                | None -> hlp (c :: cs') cs
+            in
+
+            hlp []
+        in
+
+        let one_step_det cs st = one_step_det st cs in
+
+        (* TODO: actually one_step_nondet and one_step_det differs only in used functor... *)
 
         let rec full_deterministic cs st : c_aux list * st =
-            match one_step ~deterministic:true cs st with
-            | [], _ -> cs, st
-            | [cs, st], _ -> full_deterministic cs st
-            | _ -> failwith "BUG: non-deterministic solution"
+            match one_step_det cs st with
+            | None -> cs, st
+            | Some (cs, st) -> full_deterministic cs st
         in
 
         let rec full cs st : st =
             let cs, st = full_deterministic cs st in
-            if cs = [] then st else let cs, inf = one_step cs st in full' inf [] cs
+            if cs = [] then st else let cs, c = one_step_nondet cs st in full' (st.s, c) [] cs
 
-        and full' inf errs = function
-        | [] ->
-            if errs = [] then failwith "BUG: no solutions" ;
-
-            raise @@ Failure (Nested errs, inf)
-
+        and full' (s, c as inf) errs = function
+        | [] -> raise @@ Failure (Nested errs, c, s)
         | (cs, st) :: xs ->
             try full cs st
-            with Failure (err, _) -> full' inf (err :: errs) xs
+            with Failure (err, _, _) -> full' inf (err :: errs) xs
         in
 
         object
@@ -799,7 +840,7 @@ module Type = struct
         in
 
         let rec infer_t ctx (e, inf : Expr.expr) : c_aux list * t =
-            let return c = c, { path = !current_path ; pos = inf.pos ; parent = None } in
+            let return c = c, { path = !current_path ; pos = inf.pos ; parents = [] } in
 
             match e with
             | E.Scope (ds, e) ->
@@ -992,7 +1033,7 @@ module Type = struct
 
             current_decls := (inf.name, t', !current_decls) :: old_decls ;
 
-            (`Eq (t', t), { path = !current_path ; pos = (snd v).pos; parent = None }) :: c
+            (`Eq (t', t), { path = !current_path ; pos = (snd v).pos; parents = [] }) :: c
 
         | E.Fun (xs, b), inf -> infer_decl ctx (E.Var (E.Lambda (xs, b), snd b), inf)
 
@@ -1037,7 +1078,7 @@ module Type = struct
             let bvs = IS.union bvs xs in
             `Arrow (xs, List.map (mono_c bvs) c, List.map (mono_t bvs) ts, mono_t bvs t)
 
-        | `Mu (x, t) -> `Mu (x, mono_t bvs t)
+        | `Mu (x, t) -> `Mu (x, mono_t (IS.add x bvs) t)
 
         and mono_sexp bvs ((xs, _) : sexp) : sexp =
             SexpConstructors.map (List.map @@ mono_t bvs) xs, None

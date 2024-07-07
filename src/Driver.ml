@@ -237,7 +237,7 @@ let[@ocaml.warning "-32"] main =
                 T.Type.Context.iter f decls
             in
 
-            let show_c_info ({ pos; path; _ } : T.Type.c_info) =
+            let show_c_info_short ({ pos; path; _ } : T.Type.c_info) =
                 let path = String.concat "." @@ List.rev path in
                 Printf.sprintf "%d:%d, %s" pos.row pos.col path
             in
@@ -249,7 +249,7 @@ let[@ocaml.warning "-32"] main =
 
                 print_endline "Inferred constraints:" ;
                 List.iter (fun (c, inf) ->
-                    Printf.printf "- %s - %s\n" (show_c_info inf) (T.Type.show_c c)) c ;
+                    Printf.printf "- %s - %s\n" (show_c_info_short inf) (T.Type.show_c c)) c ;
 
                 print_endline "Inferred types:" ;
                 print_decls decls ;
@@ -289,25 +289,37 @@ let[@ocaml.warning "-32"] main =
 
                 (* TODO: save typed interface file for modularity *)
 
-            with T.Type.Simpl.Failure (err, inf) ->
+            with T.Type.Simpl.Failure (err, (c, inf), s) ->
                 let open T.Type.Simpl in
+
+                let apply_subst = T.Type.apply_subst s in
 
                 let rec print_err ind = function
                 | Nested errs ->
                     Printf.printf "%s- nested errors:\n" ind ;
                     List.iter (print_err @@ ind ^ "  ") errs
 
-                | Unification (s, t1, t2) ->
-                    let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in
+                | Unification (t1, t2) ->
+                    let apply_subst = apply_subst#t T.Type.IS.empty in
 
                     Printf.printf "%s- unable to unify types:\n" ind ;
                     Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t1 ;
                     Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
+
+                | NotIndexable t ->
+                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                    Printf.printf "%s- type is not indexable: %s\n" ind t ;
                 in
 
-                Printf.printf "Type inference failed at %s:\n" (show_c_info inf) ;
+                Printf.printf "Type inference failed at %s:\n" (show_c_info_short @@ inf) ;
 
-                print_err "" err
+                print_err "" err ;
+
+                let c = c :: inf.parents in
+                let c = List.map (apply_subst#c T.Type.IS.empty) c in
+
+                print_endline "Failed constraint solution trace:" ;
+                List.iter (fun c -> Printf.printf "- %s\n" @@ T.Type.show_c c) c
             end
         | _ ->
             let rec read acc =
