@@ -1,39 +1,52 @@
 
-open GT
-
 module Pattern = Language.Pattern
 
 module Expr = struct
 
-    (* TODO: record position and names in expr *)
+    type decl_info = {
 
-    @type t =
-    | Scope     of decl list * t    (* scope expression *)
-    | Seq       of t * t            (* sequence point *)
-    | Assign    of t * t            (* assignment *)
-    | Binop     of t * t            (* binary operator *)
-    | Call      of t * t list       (* call *)
-    | Subscript of t * t            (* subscript *)
-    | Name      of string           (* variable name *)
-    | Int       of int              (* integer *)
-    | String    of string           (* string *)
-    | Lambda    of string list * t  (* lambda expression *)
-    | Skip                          (* skip *)
-    | Array     of t list           (* array *)
-    | Sexp      of string * t list  (* S-expression *)
-    | If        of t * t * t        (* if-then-else *)
-    | While     of t * t            (* while loop *)
-    | DoWhile   of t * t            (* do-while loop *)
-    | Case      of t * (Pattern.t * t) list (* case-of *)
+        public : bool;
+        name : string;
+    }
 
-    and decl =
-    | Var of bool * string * t
-    | Fun of bool * string * string list * t
-    with show, eval
+    type position = {
 
-    let decl_name = function
-    | Var (_, x, _) -> x
-    | Fun (_, x, _, _) -> x
+        row : int;
+        col : int;
+    }
+
+    type expr_info = {
+
+        name : string;
+        pos : position;
+    }
+
+    type expr_form =
+    | Scope     of decl list * expr     (* scope expression *)
+    | Seq       of expr * expr          (* sequence point *)
+    | Assign    of expr * expr          (* assignment *)
+    | Binop     of expr * expr          (* binary operator *)
+    | Call      of expr * expr list     (* call *)
+    | Subscript of expr * expr          (* subscript *)
+    | Name      of string               (* variable name *)
+    | Int       of int                  (* integer *)
+    | String    of string               (* string *)
+    | Lambda    of string list * expr   (* lambda expression *)
+    | Skip                              (* skip *)
+    | Array     of expr list            (* array *)
+    | Sexp      of string * expr list   (* S-expression *)
+    | If        of expr * expr * expr   (* if-then-else *)
+    | While     of expr * expr          (* while loop *)
+    | DoWhile   of expr * expr          (* do-while loop *)
+    | Case      of expr * (Pattern.t * expr) list (* case-of *)
+
+    and expr = expr_form * expr_info
+
+    and decl_form =
+    | Var of expr
+    | Fun of string list * expr
+
+    and decl = decl_form * decl_info
 
     let is_public = function
     | `Public | `PublicExtern -> true
@@ -41,38 +54,45 @@ module Expr = struct
 
     module L = Language.Expr
 
-    let rec from_language = function
-    | L.Const x -> Int x
-    | L.Array xs -> Array (List.map from_language xs)
-    | L.String x -> String x
-    | L.Sexp (x, xs) -> Sexp (x, List.map from_language xs)
-    | L.Var x -> Name x
-    | L.Ref x -> Name x
-    | L.Binop (_, l, r) -> Binop (from_language l, from_language r)
-    | L.Elem (xs, i) -> Subscript (from_language xs, from_language i)
-    | L.ElemRef (xs, i) -> Subscript (from_language xs, from_language i)
-    | L.Call (f, xs) -> Call (from_language f, List.map from_language xs)
-    | L.Assign (l, r) -> Assign (from_language l, from_language r)
-    | L.Seq (l, r) -> Seq (from_language l, from_language r)
-    | L.Skip -> Skip
-    | L.If (c, t, f) -> If (from_language c, from_language t, from_language f)
-    | L.While (c, b) -> While (from_language c, from_language b)
-    | L.DoWhile (b, c) -> DoWhile (from_language b, from_language c)
-    | L.Case (x, bs, _, _) -> Case ( from_language x
-                                   , List.map (fun (p, b) -> (p, from_language b)) bs
-                                   )
-    | L.Ignore t -> from_language t
-    | L.Unit -> Int 0
-    | L.Scope (ds, t) -> Scope (List.map decl_from_language ds, from_language t)
-    | L.Lambda (xs, b) -> Lambda (xs, from_language b)
-    | L.Leave -> invalid_arg "Leave"
-    | L.Intrinsic _ -> invalid_arg "Intrinsic"
-    | L.Control _ -> invalid_arg "Control"
+    let rec from_language name e =
+        let return form = form, { name ; pos = { row = 0 ; col = 0 } } in
 
-    and decl_from_language = function
-    | x, (q, `Fun      (xs,  t)) -> Fun (is_public q, x, xs, from_language t)
-    | x, (q, `Variable  None   ) -> Var (is_public q, x, Int 0)
-    | x, (q, `Variable (Some t)) -> Var (is_public q, x, from_language t)
+        match e with
+        | L.Const x -> return @@ Int x
+        | L.Array xs -> return @@ Array (List.map (from_language name) xs)
+        | L.String x -> return @@ String x
+        | L.Sexp (x, xs) -> return @@ Sexp (x, List.map (from_language name) xs)
+        | L.Var x -> return @@ Name x
+        | L.Ref x -> return @@ Name x
+        | L.Binop (_, l, r) -> return @@ Binop (from_language name l, from_language name r)
+        | L.Elem (xs, i) -> return @@ Subscript (from_language name xs, from_language name i)
+        | L.ElemRef (xs, i) -> return @@ Subscript (from_language name xs, from_language name i)
+        | L.Call (f, xs) -> return @@ Call (from_language name f, List.map (from_language name) xs)
+        | L.Assign (l, r) -> return @@ Assign (from_language name l, from_language name r)
+        | L.Seq (l, r) -> return @@ Seq (from_language name l, from_language name r)
+        | L.Skip -> return @@ Skip
+        | L.If (c, t, f) -> return @@ If (from_language name c, from_language name t, from_language name f)
+        | L.While (c, b) -> return @@ While (from_language name c, from_language name b)
+        | L.DoWhile (b, c) -> return @@ DoWhile (from_language name b, from_language name c)
+        | L.Case (x, bs, _, _) ->
+            let f (p, b) = p, from_language name b in
+            return @@ Case (from_language name x, List.map f bs)
+
+        | L.Ignore t -> from_language name t
+        | L.Unit -> return @@ Int 0
+        | L.Scope (ds, t) -> return @@ Scope (List.map decl_from_language ds, from_language name t)
+        | L.Lambda (xs, b) -> return @@ Lambda (xs, from_language name b)
+        | L.Leave -> invalid_arg "Leave"
+        | L.Intrinsic _ -> invalid_arg "Intrinsic"
+        | L.Control _ -> invalid_arg "Control"
+
+    and decl_from_language (name, (q, d)) =
+        let inf = { public = is_public q ; name } in
+
+        match d with
+        | `Fun      (xs,  t) -> Fun (xs, from_language name t), inf
+        | `Variable  None    -> Var (Int 0, { name; pos = { row = 0 ; col = 0 } }), inf
+        | `Variable (Some t) -> Var (from_language name t), inf
 end
 
 module Type = struct
@@ -125,11 +145,22 @@ module Type = struct
     | `Sexp     of string * t * t list (* type is S-expression *)
     ]
 
-    (* TODO: add type of constraint with metainfo *)
+    type c_info = {
 
-    let show_is is = match IS.elements is with
-    | i :: is -> (List.fold_left (Printf.sprintf "%s, %d") (Printf.sprintf "{%d" i) is) ^ "}"
-    | [] -> "{}"
+        path : string list;
+        pos : Expr.position;
+
+        parent : c_info option;
+    }
+
+    type c_aux = c * c_info
+
+    let show_is is =
+        let is = IS.elements is in
+        let is = String.concat ", " @@ List.map string_of_int is in
+        "{" ^ is ^ "}"
+
+    let show_list f xs = String.concat ", " @@ List.map f xs
 
     let rec show_t : t -> _ = function
     | `GVar x -> Printf.sprintf "gv_%d" x
@@ -138,13 +169,13 @@ module Type = struct
     | `String -> "String"
     | `Array t -> Printf.sprintf "[%s]" @@ show_t t
     | `Sexp xs -> show_sexp xs
-    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall %s. %s => %s -> %s"
-        (show_is xs) (GT.show list show_c c) (GT.show list show_t ts) (show_t t)
+    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall %s. (%s) => (%s) -> %s"
+        (show_is xs) (show_list show_c c) (show_list show_t ts) (show_t t)
 
     | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
     and show_sexp ((xs, row) : sexp) =
-        let f ((l, _), ts) = Printf.sprintf "%s %s" l @@ GT.show list show_t ts in
+        let f ((l, _), ts) = Printf.sprintf "%s (%s)" l @@ show_list show_t ts in
 
         let xs = List.map f @@ List.of_seq @@ SexpConstructors.to_seq xs in
         let row = Option.to_list @@ Option.map (Printf.sprintf "row_%d") row in
@@ -154,8 +185,8 @@ module Type = struct
     and show_p : p -> _ = function
     | `Wildcard -> "_"
     | `Typed (t, p) -> Printf.sprintf "%s @ %s" (show_t t) (show_p p)
-    | `Array ps -> GT.show list show_p ps
-    | `Sexp (x, ps) -> Printf.sprintf "%s %s" x @@ GT.show list show_p ps
+    | `Array ps -> "[" ^ show_list show_p ps ^ "]"
+    | `Sexp (x, ps) -> Printf.sprintf "%s (%s)" x @@ show_list show_p ps
     | `Boxed -> "#box"
     | `Unboxed -> "#val"
     | `StringTag -> "#str"
@@ -166,9 +197,9 @@ module Type = struct
     and show_c : c -> _ = function
     | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
-    | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (GT.show list show_t ts) (show_t s)
-    | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (GT.show list show_p ps)
-    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (GT.show list show_t ts)
+    | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (show_list show_t ts) (show_t s)
+    | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
+    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (show_list show_t ts)
 
     (* free logic type variables *)
 
@@ -638,16 +669,14 @@ module Type = struct
         type st = {
 
             s: Subst.t;
-            r: c list;
+            r: c_aux list;
         }
 
         type fail =
         | Nested of fail list
         | Unification of Subst.t * t * t
 
-        (* TODO: record position of error in source code *)
-
-        exception Failure of fail
+        exception Failure of fail * c_info
     end
 
     let simplify var_gen level =
@@ -655,28 +684,28 @@ module Type = struct
 
         let unify = unify var_gen level in
 
-        let single_step deterministic st : c -> (c list * st) list = function
+        let single_step deterministic st (c, inf : c_aux) : (c_aux list * st) list = match c with
         | `Eq (t1, t2) -> begin try
             let s, r = unify#t (t1, t2) (st.s, []) in
 
-            let r = List.map (fun (t1, t2) -> `Eq (t1, t2)) r in
+            let r = List.map (fun (t1, t2) -> `Eq (t1, t2), inf ) r in
             [[], { s = s; r = r @ st.r }]
 
-            with Unification_failure (s, t1, t2) -> raise @@ Failure (Unification (s, t1, t2))
+            with Unification_failure (s, t1, t2) -> raise @@ Failure (Unification (s, t1, t2), inf)
             end
 
         | c -> failwith @@ "TODO " ^ show_c c
         in
 
         let one_step deterministic st =
-            let rec hlp cs' : c list -> (c list * st) list = function
-            | [] -> []
+            let rec hlp cs' : c_aux list -> (c_aux list * st) list * c_info = function
+            | [] -> [], { path = [] ; pos = { row = 0 ; col = 0 } ; parent = None }
             | c :: cs ->
                 let xs = single_step deterministic st c in
 
                 if xs = []
                 then hlp (c :: cs') cs
-                else List.map (fun (new_cs, st) -> List.rev cs' @ new_cs @ cs, st) xs
+                else List.map (fun (new_cs, st) -> List.rev cs' @ new_cs @ cs, st) xs, snd c
             in
 
             hlp []
@@ -684,27 +713,26 @@ module Type = struct
 
         let one_step ?(deterministic=false) cs st = one_step deterministic st cs in
 
-        let rec full_deterministic cs st : c list * st =
+        let rec full_deterministic cs st : c_aux list * st =
             match one_step ~deterministic:true cs st with
-            | [] -> cs, st
-            | [cs, st] -> full_deterministic cs st
+            | [], _ -> cs, st
+            | [cs, st], _ -> full_deterministic cs st
             | _ -> failwith "BUG: non-deterministic solution"
         in
 
         let rec full cs st : st =
             let cs, st = full_deterministic cs st in
-            if cs = [] then st else full' [] @@ one_step cs st
+            if cs = [] then st else let cs, inf = one_step cs st in full' inf [] cs
 
-        and full' errs = function
+        and full' inf errs = function
         | [] ->
             if errs = [] then failwith "BUG: no solutions" ;
 
-            (* TODO: record position of assumption (from non-deterministic one_step) *)
-            raise @@ Failure (Nested errs)
+            raise @@ Failure (Nested errs, inf)
 
         | (cs, st) :: xs ->
             try full cs st
-            with Failure err -> full' (err :: errs) xs
+            with Failure (err, _) -> full' inf (err :: errs) xs
         in
 
         object
@@ -728,6 +756,8 @@ module Type = struct
 
         let public_names = Stdlib.ref Context.empty in
         let current_decls = Stdlib.ref [] in
+
+        let current_path = Stdlib.ref [] in
 
         let new_var () =
             let idx = !prev_var_idx + 1 in
@@ -763,201 +793,214 @@ module Type = struct
         | Pattern.ClosureTag -> `FunTag, ctx
 
         and infer_ps ctx ps =
-            let ps, ctx = List.fold_left (fun (ps, ctx) p ->
-                let p, ctx = infer_p ctx p in p::ps, ctx) ([], ctx) ps in
+            let f (ps, ctx) p = let p, ctx = infer_p ctx p in p::ps, ctx in
+            let ps, ctx = List.fold_left f ([], ctx) ps in
             List.rev ps, ctx
         in
 
-        let rec infer_t ctx : E.t -> c list * t = function
-        | E.Scope (ds, e) ->
-            let c1, ctx = infer_decls ctx ds in
-            let c2, t = infer_t ctx e in
+        let rec infer_t ctx (e, inf : Expr.expr) : c_aux list * t =
+            let return c = c, { path = !current_path ; pos = inf.pos ; parent = None } in
 
-            current_decls := List.rev !current_decls ;
+            match e with
+            | E.Scope (ds, e) ->
+                current_path := inf.name :: !current_path ;
 
-            c1 @ c2, t
+                let c1, ctx = infer_decls ctx ds in
+                let c2, t = infer_t ctx e in
 
-        | E.Seq (l, r) ->
-            let c1, _ = infer_t ctx l in
-            let c2, t = infer_t ctx r in
-            c1 @ c2, t
+                current_decls := List.rev !current_decls ;
+                current_path := List.tl !current_path ;
 
-        | E.Assign (l, r) ->
-            let c1, t = infer_t ctx l in
-            let c2, t' = infer_t ctx r in
-            `Eq (t, t') :: c1 @ c2, t
+                c1 @ c2, t
 
-        | E.Binop (l, r) ->
-            let c1, t1 = infer_t ctx l in
-            let c2, t2 = infer_t ctx r in
-            `Eq (t1, `Int) :: `Eq (t2, `Int) :: c1 @ c2, `Int
+            | E.Seq (l, r) ->
+                let c1, _ = infer_t ctx l in
+                let c2, t = infer_t ctx r in
+                c1 @ c2, t
 
-        | E.Call (f, xs) ->
-            let c, t = infer_t ctx f in
-            let cts = List.map (infer_t ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> c @ c') c cts in
-            let s = new_tv () in
-            `Call (t, List.map snd cts, s) :: c, s
+            | E.Assign (l, r) ->
+                let c1, t = infer_t ctx l in
+                let c2, t' = infer_t ctx r in
+                return (`Eq (t, t')) :: c1 @ c2, t
 
-        | E.Subscript (x, i) ->
-            let c1, t1 = infer_t ctx x in
-            let c2, t2 = infer_t ctx i in
-            let s = new_tv () in
-            `Eq (t2, `Int) :: `Ind (t1, s) :: c1 @ c2, s
+            | E.Binop (l, r) ->
+                let c1, t1 = infer_t ctx l in
+                let c2, t2 = infer_t ctx r in
+                return (`Eq (t1, `Int)) :: return (`Eq (t2, `Int)) :: c1 @ c2, `Int
 
-        | E.Name x -> [], Context.find x ctx
-        | E.Int 0 -> [], new_tv ()
-        | E.Int _ -> [], `Int
-        | E.String _ -> [], `String
-        | E.Lambda (xs, b) ->
-            (* here we generate variables for parameters on special level `k` *)
+            | E.Call (f, xs) ->
+                let c, t = infer_t ctx f in
+                let cts = List.map (infer_t ctx) xs in
+                let c = List.concat_map fst cts @ c in
 
-            current_level := !current_level + 1 ;
+                let s = new_tv () in
+                return (`Call (t, List.map snd cts, s)) :: c, s
 
-            let xts = List.map (fun x -> x, new_tv ()) xs in
+            | E.Subscript (x, i) ->
+                let c1, t1 = infer_t ctx x in
+                let c2, t2 = infer_t ctx i in
 
-            (* next we infer_t type of body on lower level (`k + 1`)
-             * and simplify them on this level
-             *)
+                let s = new_tv () in
+                return (`Eq (t2, `Int)) :: return (`Ind (t1, s)) :: c1 @ c2, s
 
-            current_level := !current_level + 1 ;
+            | E.Name x -> [], Context.find x ctx
+            | E.Int 0 -> [], new_tv ()
+            | E.Int _ -> [], `Int
+            | E.String _ -> [], `String
+            | E.Lambda (xs, b) ->
+                (* here we generate variables for parameters on special level `k` *)
 
-            let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
-            let c, t = infer_t ctx' b in
+                current_level := !current_level + 1 ;
 
-            let Simpl.{ s; r = c } =
-                let simplify = simplify prev_var_idx !current_level in
-                simplify#run @@ simplify#full c
-            in
+                let xts = List.map (fun x -> x, new_tv ()) xs in
 
-            (* after that we have residual constraints and substitution
-             *
-             * we perform deterministic simplification on level `k`
-             * to eliminate obvious constraints
-             *
-             * note that if we do non-deterministic simplification here,
-             * we will get overspecialized solution
-             *)
+                (* next we infer_t type of body on lower level (`k + 1`)
+                 * and simplify them on this level
+                 *)
 
-            current_level := !current_level - 1 ;
+                current_level := !current_level + 1 ;
 
-            let bc, Simpl.{ s; r = fc } =
-                let simplify = simplify prev_var_idx !current_level in
-                simplify#run ~s @@ simplify#full_deterministic c
-            in
+                let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
+                let c, t = infer_t ctx' b in
 
-            (* now we have two kinds of residual constraints:
-             * "true" residual constraints are free since we unable to solve them on level `k`,
-             * other returned constraints are bound since we unable to solve them deterministically
-             *
-             * we apply substitution and collect free variables on level `k` and `k + 1` as bound
-             *)
+                let Simpl.{ s; r = c } =
+                    let simplify = simplify prev_var_idx !current_level in
+                    simplify#run @@ simplify#full c
+                in
 
-            let apply_subst = apply_subst s in
-            let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
-            let fc = List.map (apply_subst#c IS.empty) fc in
-            let bc = List.map (apply_subst#c IS.empty) bc in
-            let t = apply_subst#t IS.empty t in
+                (* after that we have residual constraints and substitution
+                 *
+                 * we perform deterministic simplification on level `k`
+                 * to eliminate obvious constraints
+                 *
+                 * note that if we do non-deterministic simplification here,
+                 * we will get overspecialized solution
+                 *)
 
-            let bvs =
-                let level = !current_level in
-                let free_lvars = free_lvars @@ fun l -> l >= level in
+                current_level := !current_level - 1 ;
 
-                if not @@ IS.is_empty @@ List.fold_left (free_lvars#c IS.empty) IS.empty fc then
-                    failwith "lowlevel variables in free constraints occurred" ;
+                let bc, Simpl.{ s; r = fc } =
+                    let simplify = simplify prev_var_idx !current_level in
+                    simplify#run ~s @@ simplify#full_deterministic c
+                in
 
-                let fvs = IS.empty in
-                let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
-                let fvs = List.fold_left (free_lvars#c IS.empty) fvs bc in
-                let fvs = free_lvars#t IS.empty fvs t in
-                fvs
-            in
+                (* now we have two kinds of residual constraints:
+                 * "true" residual constraints are free since we unable to solve them on level `k`,
+                 * other returned constraints are bound since we unable to solve them deterministically
+                 *
+                 * we apply substitution and collect free variables on level `k` and `k + 1` as bound
+                 *)
 
-            (* to build result type, we need to convert bound variables to ground *)
+                let apply_subst = apply_subst s in
+                let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
+                let fc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) fc in
+                let bc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) bc in
+                let t = apply_subst#t IS.empty t in
 
-            let bc, ts, t =
-                let level = !current_level in
-                let lvars_to_gvars = lvars_to_gvars @@ fun l -> l >= level in
+                let bvs =
+                    let level = !current_level in
+                    let free_lvars = free_lvars @@ fun l -> l >= level in
 
-                let ts = List.map (lvars_to_gvars#t IS.empty) ts in
-                let bc = List.map (lvars_to_gvars#c IS.empty) bc in
-                let t = lvars_to_gvars#t IS.empty t in
-                bc, ts, t
-            in
+                    let free_lvars_c fvs (c, _) = free_lvars#c IS.empty fvs c in
 
-            (* since we discard substitution, apply it on debug info *)
-            begin
-                let rec f (x, t, inner) = x, apply_subst#t IS.empty t, List.map f inner in
-                current_decls := List.map f !current_decls
-            end ;
+                    if not @@ IS.is_empty @@ List.fold_left free_lvars_c IS.empty fc then
+                        failwith "BUG: lowlevel variables in free constraints occurred" ;
 
-            fc, `Arrow (bvs, bc, ts, t)
+                    let fvs = IS.empty in
+                    let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
+                    let fvs = List.fold_left free_lvars_c fvs bc in
+                    let fvs = free_lvars#t IS.empty fvs t in
+                    fvs
+                in
 
-        | E.Skip -> [], new_tv ()
-        | E.Array xs ->
-            let css = List.map (infer_t ctx) xs in
-            let t = new_tv () in
-            let c = List.fold_left (fun c (c', s) -> `Eq (t, s) :: c @ c') [] css in
-            c, `Array t
+                (* to build result type, we need to convert bound variables to ground *)
 
-        | E.Sexp (x, xs) ->
-            let css = List.map (infer_t ctx) xs in
-            let c = List.fold_left (fun c (c', _) -> c @ c') [] css in
+                let bc, ts, t =
+                    let level = !current_level in
+                    let lvars_to_gvars = lvars_to_gvars @@ fun l -> l >= level in
 
-            let t = new_tv () in
-            `Sexp (x, t, List.map snd css) :: c, t
+                    let ts = List.map (lvars_to_gvars#t IS.empty) ts in
+                    let bc = List.map (fun (c, _) -> lvars_to_gvars#c IS.empty c) bc in
+                    let t = lvars_to_gvars#t IS.empty t in
+                    bc, ts, t
+                in
 
-        | E.If (c, t, f) ->
-            let c1, _ = infer_t ctx c in
-            let c2, t = infer_t ctx t in
-            let c3, t' = infer_t ctx f in
-            `Eq (t, t') :: c1 @ c2 @ c3, t
+                (* since we discard substitution, apply it on debug info *)
+                begin
+                    let rec f (x, t, inner) = x, apply_subst#t IS.empty t, List.map f inner in
+                    current_decls := List.map f !current_decls
+                end ;
 
-        | E.While (c, b) ->
-            let c1, _ = infer_t ctx c in
-            let c2, _ = infer_t ctx b in
-            c1 @ c2, new_tv ()
+                fc, `Arrow (bvs, bc, ts, t)
 
-        | E.DoWhile (b, c) ->
-            let c1, _ = infer_t ctx b in
-            let c2, _ = infer_t ctx c in
-            c1 @ c2, new_tv ()
+            | E.Skip -> [], new_tv ()
+            | E.Array xs ->
+                let cts = List.map (infer_t ctx) xs in
 
-        | E.Case (x, bs) ->
-            let c, t = infer_t ctx x in
-            let s = new_tv () in
+                let t = new_tv () in
+                let c = List.concat_map (fun (c', s) -> return (`Eq (t, s)) :: c') cts in
 
-            let f (c, ps) (p, b) =
-                let p, ctx = infer_p ctx p in
-                let c', s' = infer_t ctx b in
-                `Eq (s, s') :: c @ c', p::ps
-            in
+                c, `Array t
 
-            let c, ps = List.fold_left f (c, []) bs in
-            `Match (t, List.rev ps) :: c, s
+            | E.Sexp (x, xs) ->
+                let cts = List.map (infer_t ctx) xs in
+                let c = List.concat_map fst cts in
 
-        and infer_decl ctx = function
-        | E.Var (pub, x, v) ->
-            let t' = Context.find x ctx in
+                let t = new_tv () in
+                return (`Sexp (x, t, List.map snd cts)) :: c, t
 
-            if pub then public_names := Context.add x t' !public_names ;
+            | E.If (c, t, f) ->
+                let c1, _ = infer_t ctx c in
+                let c2, t = infer_t ctx t in
+                let c3, t' = infer_t ctx f in
+                return (`Eq (t, t')) :: c1 @ c2 @ c3, t
+
+            | E.While (c, b) ->
+                let c1, _ = infer_t ctx c in
+                let c2, _ = infer_t ctx b in
+                c1 @ c2, new_tv ()
+
+            | E.DoWhile (b, c) ->
+                let c1, _ = infer_t ctx b in
+                let c2, _ = infer_t ctx c in
+                c1 @ c2, new_tv ()
+
+            | E.Case (x, bs) ->
+                let c, t = infer_t ctx x in
+                let s = new_tv () in
+
+                let f (cs, ps) (p, b) =
+                    let p, ctx = infer_p ctx p in
+                    let c', s' = infer_t ctx b in
+                    (return (`Eq (s, s')) :: c') :: cs, p::ps
+                in
+
+                let cs, ps = List.fold_left f ([c], []) bs in
+                let c = List.concat @@ List.rev cs in
+                return (`Match (t, ps)) :: c, s
+
+        and infer_decl ctx : E.decl -> _ = function
+        | E.Var v, inf ->
+            let t' = Context.find inf.name ctx in
+
+            if inf.public then public_names := Context.add inf.name t' !public_names ;
 
             let old_decls = !current_decls in
             current_decls := [] ;
 
             let c, t = infer_t ctx v in
 
-            current_decls := (x, t', !current_decls) :: old_decls ;
+            current_decls := (inf.name, t', !current_decls) :: old_decls ;
 
-            `Eq (Context.find x ctx, t) :: c
+            (`Eq (t', t), { path = !current_path ; pos = (snd v).pos; parent = None }) :: c
 
-        | E.Fun (pub, x, xs, b) -> infer_decl ctx @@ E.Var (pub, x, E.Lambda (xs, b))
+        | E.Fun (xs, b), inf -> infer_decl ctx (E.Var (E.Lambda (xs, b), snd b), inf)
 
         and infer_decls ctx ds =
-            let f ctx d = Context.add (E.decl_name d) (new_tv ()) ctx in
+            let f ctx (_, inf : E.decl) = Context.add inf.name (new_tv ()) ctx in
             let ctx = List.fold_left f ctx ds in
 
-            List.fold_left (fun c d -> infer_decl ctx d @ c) [] ds, ctx
+            List.concat_map (fun d -> infer_decl ctx d) ds, ctx
         in
 
         object

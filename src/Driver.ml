@@ -202,8 +202,7 @@ let[@ocaml.warning "-32"] main =
         | `TC ->
             let module T = Typing in
 
-            let prog' = T.Expr.from_language @@ snd prog in
-            print_endline @@ T.Expr.show_t prog' ;
+            let prog' = T.Expr.from_language cmd#basename @@ snd prog in
 
             (* TODO: load type interface files for imported modules *)
 
@@ -238,13 +237,21 @@ let[@ocaml.warning "-32"] main =
                 T.Type.Context.iter f decls
             in
 
+            let show_c_info ({ pos; path; _ } : T.Type.c_info) =
+                let path = String.concat "." @@ List.rev path in
+                Printf.sprintf "%d:%d, %s" pos.row pos.col path
+            in
+
             begin try
                 let infer = T.Type.infer () in
                 let c, _ = infer#term ctx prog' in
                 let decls = infer#all_decls () in
 
                 print_endline "Inferred constraints:" ;
-                print_endline @@ GT.show GT.list T.Type.show_c c ;
+                List.iter (fun (c, inf) ->
+                    Printf.printf "- %s - %s\n" (show_c_info inf) (T.Type.show_c c)) c ;
+
+                print_endline "Inferred types:" ;
                 print_decls decls ;
 
                 let simplify = infer#simplify 0 in
@@ -282,7 +289,7 @@ let[@ocaml.warning "-32"] main =
 
                 (* TODO: save typed interface file for modularity *)
 
-            with T.Type.Simpl.Failure err ->
+            with T.Type.Simpl.Failure (err, inf) ->
                 let open T.Type.Simpl in
 
                 let rec print_err ind = function
@@ -298,7 +305,8 @@ let[@ocaml.warning "-32"] main =
                     Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
                 in
 
-                print_endline "Type inference failed:" ;
+                Printf.printf "Type inference failed at %s:\n" (show_c_info inf) ;
+
                 print_err "" err
             end
         | _ ->
