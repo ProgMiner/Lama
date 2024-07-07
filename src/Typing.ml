@@ -761,8 +761,6 @@ module Type = struct
             idx
         in
 
-        (* TODO: think about recursive Call-s... *)
-
         let single_step_lvar st l (c, inf : c_aux) =
             if l < level then
                 let s = (lift_lvars var_gen l)#c IS.empty c st.s in
@@ -794,7 +792,20 @@ module Type = struct
 
             | `Call (ft, ts, t) ->
                 begin match shaps st.s ft with
-                | `LVar (_, l) -> single_step_lvar st l c_aux
+                | `LVar (_, l) ->
+                    (* dirty hack to support polymorphism in recursive functions
+                     *
+                     * here we utilize the fact that odd levels are special levels for parameters
+                     * and force Call-s to stay under forall binder to prevent lifting of argument
+                     * types
+                     *
+                     * it make we able to infer polymorphic functions that uses recursion, because
+                     * if argument types lifted too much, they will be monomorphized any way...
+                     *)
+
+                    let level = if level mod 2 = 0 then Int.max 0 @@ level - 1 else level in
+                    single_step_lvar st (Int.max l level) c_aux
+
                 | `Arrow (_, _, fts, _) ->
                     begin
                         let args_num = List.length ts in
@@ -802,6 +813,7 @@ module Type = struct
                             raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
                     end ;
 
+                    (* TODO: think about recursive Call-s... *)
                     let [@warning "-8"] `Arrow (xs, fc, fts, ft) : t =
                         (apply_subst st.s)#t IS.empty ft
                     in
