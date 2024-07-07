@@ -696,6 +696,11 @@ module Type = struct
         | t -> t
         in
 
+        let single_step_lvar st l c = if l < level
+            then Some ([], { st with r = c :: st.r })
+            else None
+        in
+
         let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
             match c with
             | `Eq (t1, t2) -> begin try
@@ -710,7 +715,7 @@ module Type = struct
 
             | `Ind (t1, t2) ->
                 begin match shaps st.s t1 with
-                | `LVar _ -> None
+                | `LVar (_, l) -> single_step_lvar st l c_aux
                 | `String -> Some ([`Eq (t2, `Int)], st)
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
                 | `Sexp _ -> failwith "TODO: Ind(Sexp)"
@@ -844,7 +849,16 @@ module Type = struct
 
             match e with
             | E.Scope (ds, e) ->
-                current_path := inf.name :: !current_path ;
+                begin
+                    let prev_path = !current_path in
+
+                    let name =
+                        if prev_path <> [] && inf.name = List.hd prev_path
+                        then "<anon>" else inf.name
+                    in
+
+                    current_path := name :: !current_path ;
+                end ;
 
                 let c1, ctx = infer_decls ctx ds in
                 let c2, t = infer_t ctx e in
@@ -971,6 +985,8 @@ module Type = struct
                     let rec f (x, t, inner) = x, apply_subst#t IS.empty t, List.map f inner in
                     current_decls := List.map f !current_decls
                 end ;
+
+                current_level := !current_level - 1 ;
 
                 fc, `Arrow (bvs, bc, ts, t)
 
