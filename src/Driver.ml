@@ -309,6 +309,14 @@ let[@ocaml.warning "-32"] main =
                 | NotIndexable t ->
                     let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
                     Printf.printf "%s- type is not indexable: %s\n" ind t ;
+
+                | NotCallable t ->
+                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                    Printf.printf "%s- type is not callable: %s\n" ind t ;
+
+                | WrongArgsNum (t, n) ->
+                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                    Printf.printf "%s- wrong number of arguments (given %d) in call: %s\n" ind n t ;
                 in
 
                 Printf.printf "Type inference failed at %s:\n" (show_c_info_short @@ inf) ;
@@ -319,7 +327,9 @@ let[@ocaml.warning "-32"] main =
                 let c = List.map (apply_subst#c T.Type.IS.empty) c in
 
                 print_endline "Failed constraint solution trace:" ;
-                List.iter (fun c -> Printf.printf "- %s\n" @@ T.Type.show_c c) c
+                List.iter (fun c -> Printf.printf "- %s\n" @@ T.Type.show_c c) c ;
+
+                exit 1
             end
         | _ ->
             let rec read acc =

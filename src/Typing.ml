@@ -98,6 +98,7 @@ end
 module Type = struct
 
     module IS = Set.Make(Int)
+    module IM = Map.Make(Int)
     module Context = Map.Make(String)
 
     module SexpLabel = struct
@@ -197,20 +198,20 @@ module Type = struct
     and show_c : c -> _ = function
     | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
-    | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s, %s)" (show_t t) (show_list show_t ts) (show_t s)
+    | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s)" (show_list show_t @@ t :: ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (show_list show_t ts)
 
-    (* free logic type variables *)
+    (* logic type variables with no respect to substitution *)
 
-    let free_lvars p =
+    let lvars p =
         let rec ftv_t bvs fvs : t -> _ = function
         | `GVar x ->
-            if not @@ IS.mem x bvs then failwith "free_lvars: free ground variable" ;
+            if not @@ IS.mem x bvs then failwith "lvars: free ground variable" ;
             fvs
 
         | `LVar (x, l) ->
-            if IS.mem x bvs then failwith "free_lvars: bound logic variable" ;
+            if IS.mem x bvs then failwith "lvars: bound logic variable" ;
             if p l then IS.add x fvs else fvs
 
         | `Int -> fvs
@@ -255,16 +256,16 @@ module Type = struct
             method c = ftv_c
         end
 
-    (* convert logic variables to ground *)
+    (* convert logic variables to ground with no respect to substitution *)
 
     let lvars_to_gvars p =
         let rec ltog_t bvs : t -> t = function
         | `GVar x as t ->
-            if not @@ IS.mem x bvs then failwith "free_lvars: free ground variable" ;
+            if not @@ IS.mem x bvs then failwith "lvars_to_gvars: free ground variable" ;
             t
 
         | `LVar (x, l) as t ->
-            if IS.mem x bvs then failwith "free_lvars: bound logic variable" ;
+            if IS.mem x bvs then failwith "lvars_to_gvars: bound logic variable" ;
             if p l then `GVar x else t
 
         | `Int -> `Int
@@ -308,6 +309,63 @@ module Type = struct
             method c = ltog_c
         end
 
+    (* refresh ground variables with logic with no respect to substitution *)
+
+    let gvars_to_lvars level xs =
+        let rec gtol_t bvs = function
+        | `GVar x as t ->
+            begin match IM.find_opt x xs with
+            | Some x -> `LVar (x, level)
+            | None ->
+                if not @@ IS.mem x bvs then failwith "gvars_to_lvars: free ground variable" ;
+                t
+            end
+
+        | `LVar (_, l) as t ->
+            if l >= level then failwith "gvars_to_lvars: logic variable occurred" ;
+            t
+
+        | `Int -> `Int
+        | `String -> `String
+        | `Array t -> `Array (gtol_t bvs t)
+        | `Sexp xs -> `Sexp (gtol_sexp bvs xs)
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            `Arrow (xs, List.map (gtol_c bvs) c, List.map (gtol_t bvs) ts, gtol_t bvs t)
+
+        | `Mu (x, t) -> `Mu (x, gtol_t (IS.add x bvs) t)
+
+        and gtol_sexp bvs ((xs, row) : sexp) : sexp =
+            SexpConstructors.map (List.map @@ gtol_t bvs) xs, row
+
+        and gtol_p bvs : p -> p = function
+        | `Wildcard -> `Wildcard
+        | `Typed (t, p) -> `Typed (gtol_t bvs t, gtol_p bvs p)
+        | `Array ps -> `Array (List.map (gtol_p bvs) ps)
+        | `Sexp (x, ps) -> `Sexp (x, List.map (gtol_p bvs) ps)
+        | `Boxed -> `Boxed
+        | `Unboxed -> `Unboxed
+        | `StringTag -> `StringTag
+        | `ArrayTag -> `ArrayTag
+        | `SexpTag -> `SexpTag
+        | `FunTag -> `FunTag
+
+        and gtol_c bvs : c -> c = function
+        | `Eq (t1, t2) -> `Eq (gtol_t bvs t1, gtol_t bvs t2)
+        | `Ind (t1, t2) -> `Ind (gtol_t bvs t1, gtol_t bvs t2)
+        | `Call (t, ts, t') -> `Call (gtol_t bvs t, List.map (gtol_t bvs) ts, gtol_t bvs t')
+        | `Match (t, ps) -> `Match (gtol_t bvs t, List.map (gtol_p bvs) ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, gtol_t bvs t, List.map (gtol_t bvs) ts)
+        in
+
+        object
+
+            method t = gtol_t
+            method sexp = gtol_sexp
+            method p = gtol_p
+            method c = gtol_c
+        end
+
     (* substitution *)
 
     module Subst = struct
@@ -334,8 +392,6 @@ module Type = struct
     end
 
     let apply_subst s =
-        let module IM = Map.Make(Int) in
-
         let vars_path = Stdlib.ref IM.empty in
 
         let rec subst_t bvs : t -> t = function
@@ -676,6 +732,8 @@ module Type = struct
         | Nested of fail list
         | Unification of t * t
         | NotIndexable of t
+        | NotCallable of t
+        | WrongArgsNum of t * int
 
         exception Failure of fail * c_aux * Subst.t
     end
@@ -696,8 +754,20 @@ module Type = struct
         | t -> t
         in
 
-        let single_step_lvar st l c = if l < level
-            then Some ([], { st with r = c :: st.r })
+        let new_var () =
+            let idx = !var_gen + 1 in
+            var_gen := idx ;
+
+            idx
+        in
+
+        (* TODO: think about recursive Call-s... *)
+
+        let single_step_lvar st l (c, inf : c_aux) =
+            if l < level then
+                let s = (lift_lvars var_gen l)#c IS.empty c st.s in
+                Some ([], { s ; r = (c, inf) :: st.r })
+
             else None
         in
 
@@ -720,6 +790,38 @@ module Type = struct
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
                 | `Sexp _ -> failwith "TODO: Ind(Sexp)"
                 | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
+                end
+
+            | `Call (ft, ts, t) ->
+                begin match shaps st.s ft with
+                | `LVar (_, l) -> single_step_lvar st l c_aux
+                | `Arrow (_, _, fts, _) ->
+                    begin
+                        let args_num = List.length ts in
+                        if args_num <> List.length fts then
+                            raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
+                    end ;
+
+                    let [@warning "-8"] `Arrow (xs, fc, fts, ft) : t =
+                        (apply_subst st.s)#t IS.empty ft
+                    in
+
+                    (* Printf.printf "ARROW TYPE: %s\n" @@ show_t @@ `Arrow (xs, fc, fts, ft) ; *)
+
+                    let xs = IM.of_seq @@ Seq.map (fun x -> x, new_var ()) @@ IS.to_seq xs in
+                    let gtol = gvars_to_lvars level xs in
+
+                    let fc = List.map (gtol#c IS.empty) fc in
+                    let fts = List.map (gtol#t IS.empty) fts in
+                    let ft = gtol#t IS.empty ft in
+
+                    let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
+                    let c = `Eq (ft, t) :: c in
+                    let c = fc @ c in
+
+                    Some (c, st)
+
+                | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
                 end
 
             | c -> failwith @@ "TODO " ^ show_c c
@@ -849,22 +951,19 @@ module Type = struct
 
             match e with
             | E.Scope (ds, e) ->
-                begin
+                let name_in_path =
                     let prev_path = !current_path in
+                    prev_path = [] || inf.name <> List.hd prev_path
+                in
 
-                    let name =
-                        if prev_path <> [] && inf.name = List.hd prev_path
-                        then "<anon>" else inf.name
-                    in
-
-                    current_path := name :: !current_path ;
-                end ;
+                if name_in_path then current_path := inf.name :: !current_path ;
 
                 let c1, ctx = infer_decls ctx ds in
                 let c2, t = infer_t ctx e in
 
                 current_decls := List.rev !current_decls ;
-                current_path := List.tl !current_path ;
+
+                if name_in_path then current_path := List.tl !current_path ;
 
                 c1 @ c2, t
 
@@ -954,17 +1053,17 @@ module Type = struct
 
                 let bvs =
                     let level = !current_level in
-                    let free_lvars = free_lvars @@ fun l -> l >= level in
+                    let lvars = lvars @@ fun l -> l >= level in
 
-                    let free_lvars_c fvs (c, _) = free_lvars#c IS.empty fvs c in
+                    let lvars_c fvs (c, _) = lvars#c IS.empty fvs c in
 
-                    if not @@ IS.is_empty @@ List.fold_left free_lvars_c IS.empty fc then
+                    if not @@ IS.is_empty @@ List.fold_left lvars_c IS.empty fc then
                         failwith "BUG: lowlevel variables in free constraints occurred" ;
 
                     let fvs = IS.empty in
-                    let fvs = List.fold_left (free_lvars#t IS.empty) fvs ts in
-                    let fvs = List.fold_left free_lvars_c fvs bc in
-                    let fvs = free_lvars#t IS.empty fvs t in
+                    let fvs = List.fold_left (lvars#t IS.empty) fvs ts in
+                    let fvs = List.fold_left lvars_c fvs bc in
+                    let fvs = lvars#t IS.empty fvs t in
                     fvs
                 in
 
