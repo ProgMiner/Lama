@@ -728,15 +728,19 @@ module Type = struct
             r: c_aux list;
         }
 
-        type fail =
+        type fail_form =
         | Nested of fail list
         | Unification of t * t
         | NotIndexable of t
         | NotCallable of t
+        | NotMatchable of t * p list
         | NotSexp of t
         | WrongArgsNum of t * int
+        | NotSupported
 
-        exception Failure of fail * c_aux * Subst.t
+        and fail = fail_form * c_aux * Subst.t
+
+        exception Failure of fail
     end
 
     let simplify var_gen level =
@@ -745,12 +749,26 @@ module Type = struct
         let unify = unify var_gen level in
 
         (* shaps = SHallow APply Substitution *)
-        let shaps s = function
+        let rec shaps s = function
         | `LVar (x, _) as t ->
             begin match Subst.find_type x s with
-            | Some t -> t
+            | Some t -> shaps s t
             | None -> t
             end
+
+        | `Sexp (xs, row) ->
+            let rec shaps_sexp acc : int option -> sexp = function
+            | None -> acc, None
+            | Some row ->
+                match Subst.find_sexp row s with
+                | None -> acc, Some row
+                | Some (xs, row) ->
+                    let f _ _ _ = failwith "simplify: intersecting constructors in S-exp" in
+                    let xs = SexpConstructors.union f acc xs in
+                    shaps_sexp xs row
+            in
+
+            `Sexp (shaps_sexp xs row)
 
         | t -> t
         in
@@ -760,6 +778,113 @@ module Type = struct
             var_gen := idx ;
 
             idx
+        in
+
+        let exception Match_failure in
+
+        let rec match_t : p * t -> (t list * (t * p) list) option = function
+        | `Wildcard, `Int -> Some ([], [])
+        | `Wildcard, `String -> Some ([], [])
+        | `Wildcard, `Array t -> Some ([], [t, `Wildcard])
+        | `Wildcard, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = snd @@ SexpConstructors.find_first (fun _ -> true) xs in
+            Some ([], List.map (fun t -> t, `Wildcard) ts)
+
+        | `Wildcard, `Arrow _ -> Some ([], [])
+        | `Typed (t', p), t -> Option.map (fun (eqs, ps) -> t' :: eqs, ps) @@ match_t (p, t)
+        | `Array ps, `Array t -> Some ([], List.map (fun p -> t, p) ps)
+        | `Sexp (x, ps), `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = SexpConstructors.find_opt (x, List.length ps) xs in
+            Option.map (fun ts -> [], List.combine ts ps) ts
+
+        | `Boxed, `String -> Some ([], [])
+        | `Boxed, `Array t -> Some ([], [t, `Wildcard])
+        | `Boxed, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = snd @@ SexpConstructors.find_first (fun _ -> true) xs in
+            Some ([], List.map (fun t -> t, `Wildcard) ts)
+
+        | `Boxed, `Arrow _ -> Some ([], [])
+        | `Unboxed, `Int -> Some ([], [])
+        | `StringTag, `String -> Some ([], [])
+        | `ArrayTag, `Array t -> Some ([], [t, `Wildcard])
+        | `SexpTag, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = snd @@ SexpConstructors.find_first (fun _ -> true) xs in
+            Some ([], List.map (fun t -> t, `Wildcard) ts)
+
+        | `FunTag, `Arrow _ -> Some ([], [])
+        | _, `GVar _ -> failwith "match_t: ground variable"
+        | _, `LVar _ -> failwith "match_t: logic variable"
+        | _, `Sexp (xs, _) when SexpConstructors.cardinal xs <> 1 ->
+            failwith "match_t: bruh moment"
+
+        | _, `Mu _ -> failwith "match_t: recursive type"
+        | _ -> None
+        in
+
+        let group_by_fst xs =
+            let res = Hashtbl.create @@ List.length xs in
+            Hashtbl.add_seq res @@ List.to_seq xs ;
+            res
+        in
+
+        let hashtbl_to_assoc xs =
+            let xs = Hashtbl.to_seq xs in
+
+            let xs = Seq.group (fun (k1, _) (k2, _) -> k1 = k2) xs in
+            let xs = Seq.map List.of_seq xs in
+
+            Seq.map (fun xs -> fst @@ List.hd xs, List.map snd xs) xs
+        in
+
+        let combine_hashtbls xs =
+            let sz = List.fold_left (fun c xs -> c + Hashtbl.length xs) 0 xs in
+            let res = Hashtbl.create sz in
+
+            let f xs = Seq.iter (fun (k, xs) -> Hashtbl.add res k xs) @@ hashtbl_to_assoc xs in
+            List.iter f xs ;
+
+            res
+        in
+
+        let product_lists =
+            let rec hlp acc = function
+            | [] -> acc
+            | xs :: xs' -> hlp (Seq.map_product (fun x xs -> x :: xs) (List.to_seq xs) acc) xs'
+            in
+
+            fun xs -> List.of_seq @@ hlp (List.to_seq [[]]) xs
+        in
+
+        let match_t_ast st t ps t' : c list * st =
+            let ps = List.filter_map (fun p -> match_t (p, t')) ps in
+
+            if ps = [] then raise Match_failure ;
+
+            let eqs = List.concat_map fst ps in
+            let eqs = List.map (fun t' -> `Eq (t, t')) eqs in
+
+            let ps = combine_hashtbls @@ List.map (fun (_, ps) -> group_by_fst ps) ps in
+            let ps = List.of_seq @@ hashtbl_to_assoc ps in
+
+            (* here we have list of pairs, where first component is type and second is
+             * list of lists of patterns, came from different patterns
+             *
+             * now we need to get cartesian product of lists of patterns
+             * to get patterns for one Match
+             *
+             * in fact, if one pattern returned one type several times,
+             * it must be matched with all returned sub-patterns
+             *
+             * but if one type returned from several patterns,
+             * it must be matched with any of sub-patterns...
+             *)
+
+            let ps = List.map (fun (t, ps) -> t, product_lists ps) ps in
+            let ps = List.concat_map (fun (t, ps) -> List.map (fun ps -> `Match (t, ps)) ps) ps in
+
+            (* TODO: think about recursive types matching... *)
+
+            eqs @ ps, st
         in
 
         let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
@@ -787,7 +912,7 @@ module Type = struct
                 | `LVar (_, l) -> handle_lvar st l c_aux
                 | `String -> Some ([`Eq (t2, `Int)], st)
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
-                | `Sexp _ -> failwith "TODO: Ind(Sexp)"
+                | `Sexp _ -> raise @@ Failure (NotSupported, c_aux, st.s)
                 | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
                 end
 
@@ -857,6 +982,28 @@ module Type = struct
                 | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
                 end
 
+            | `Match (t, ps) ->
+                let not_matchable () = raise @@ Failure (NotMatchable (t, ps), c_aux, st.s) in
+
+                begin match shaps st.s t with
+                | `LVar (_, l) -> handle_lvar st l c_aux
+                | `Sexp (_, Some _) -> None
+                | `Sexp (xs, None) as t ->
+                    let f x ts (cs, st) =
+                        let t' = `Sexp (SexpConstructors.singleton x ts, None) in
+                        let cs', st = match_t_ast st t ps t' in
+                        cs' :: cs, st
+                    in
+
+                    begin try
+                        let cs, st = SexpConstructors.fold f xs ([], st) in
+                        Some (List.concat @@ List.rev cs, st)
+                    with Match_failure -> not_matchable ()
+                    end
+
+                | t -> try Some (match_t_ast st t ps t) with Match_failure -> not_matchable ()
+                end
+
             | `Sexp (x, t, ts) ->
                 begin match shaps st.s t with
                 | `LVar (_, l) ->
@@ -875,10 +1022,11 @@ module Type = struct
                 | _ -> raise @@ Failure (NotSexp t, c_aux, st.s)
                 end
 
-            | c -> failwith @@ "TODO " ^ show_c c
+            | _ -> raise @@ Failure (NotSupported, c_aux, st.s)
+            [@@warning "-11"]
         in
 
-        let single_step_nondet st (c, inf : c_aux) : (c list * st) list =
+        let single_step_nondet greedy st (c, inf : c_aux) : (c list * st) list =
             let gen =
                 let f (t1, t2) = `Eq (t1, t2) in
 
@@ -902,9 +1050,24 @@ module Type = struct
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
-            | `Call (ft, ts, t) ->
+            | `Call (ft, ts, t) when greedy > 2 ->
                 begin match shaps st.s ft with
                 | `LVar (_, l) when l >= level -> gen [[ft, `Arrow (IS.empty, [], ts, t)]]
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
+            | `Match (t, _) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) when l >= level && greedy > 1 ->
+                    (* naïve attempt to monomorphize free variable *)
+                    gen [[t, `Int]]
+
+                | `Sexp (_, Some row) when greedy > 0 ->
+                    (* greedy assumption that there aren't more constructors in S-expression *)
+                    let t1 = `Sexp (SexpConstructors.empty, Some row) in
+                    let t2 = `Sexp (SexpConstructors.empty, None) in
+                    gen [[t1, t2]]
+
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
@@ -923,28 +1086,30 @@ module Type = struct
 
         let one_step_f cs' cs (c, inf : c_aux) (new_cs, st) =
             let f c' = c', { inf with parents = c :: inf.parents } in
-            List.rev cs' @ List.map f new_cs @ cs, st
+            List.rev_append cs' @@ List.map f new_cs @ cs, st
         in
 
         let one_step_nondet st =
-            let rec hlp cs' : c_aux list -> (c_aux list * st) list * c_aux = function
+            let rec hlp greedy cs' : c_aux list -> (c_aux list * st) list * c_aux = function
             | [] ->
-                (*
-                let cs = List.rev cs' in
-                let apply_subst = (apply_subst st.s)#c IS.empty in
-                let cs = List.map (fun (c, _) -> apply_subst c) cs in
-                Printf.printf "CONSTRAINTS: %s\n" @@ show_list show_c cs ;
-                *)
+                if greedy < 5
+                then hlp (greedy + 1) [] @@ List.rev cs'
+                else begin
+                    let cs = List.rev cs' in
+                    let apply_subst = (apply_subst st.s)#c IS.empty in
+                    let cs = List.map (fun (c, _) -> apply_subst c) cs in
+                    Printf.printf "CONSTRAINTS: %s\n" @@ show_list show_c cs ;
 
-                failwith "BUG: no solutions"
+                    failwith "BUG: no solutions"
+                end
 
             | c :: cs ->
-                match single_step_nondet st c with
-                | [] -> hlp (c :: cs') cs
+                match single_step_nondet greedy st c with
+                | [] -> hlp greedy (c :: cs') cs
                 | xs -> List.map (one_step_f cs' cs c) xs, c
             in
 
-            hlp []
+            hlp 0 []
         in
 
         let one_step_nondet cs st = one_step_nondet st cs in
@@ -979,7 +1144,7 @@ module Type = struct
         | [] -> raise @@ Failure (Nested errs, c, s)
         | (cs, st) :: xs ->
             try full cs st
-            with Failure (err, _, _) -> full' inf (err :: errs) xs
+            with Failure err -> full' inf (err :: errs) xs
         in
 
         object

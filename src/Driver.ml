@@ -289,49 +289,65 @@ let[@ocaml.warning "-32"] main =
 
                 (* TODO: save typed interface file for modularity *)
 
-            with T.Type.Simpl.Failure (err, (c, inf), s) ->
+            with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in
 
-                let apply_subst = T.Type.apply_subst s in
+                let rec print_err ind (err, (c, inf), s) =
+                    let apply_subst = T.Type.apply_subst s in
 
-                let rec print_err ind = function
-                | Nested errs ->
-                    Printf.printf "%s- nested errors:\n" ind ;
-                    List.iter (print_err @@ ind ^ "  ") errs
+                    Printf.printf "%s+ at [%s] " ind (show_c_info_short @@ inf) ;
 
-                | Unification (t1, t2) ->
-                    let apply_subst = apply_subst#t T.Type.IS.empty in
+                    begin match err with
+                    | Nested errs ->
+                        Printf.printf "nested errors:\n" ;
+                        List.iter (print_err @@ ind ^ "| ") errs
 
-                    Printf.printf "%s- unable to unify types:\n" ind ;
-                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t1 ;
-                    Printf.printf "%s  - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
+                    | Unification (t1, t2) ->
+                        let apply_subst = apply_subst#t T.Type.IS.empty in
 
-                | NotIndexable t ->
-                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
-                    Printf.printf "%s- type is not indexable: %s\n" ind t ;
+                        Printf.printf "unable to unify types:\n" ;
+                        Printf.printf "%s| - %s\n" ind @@ T.Type.show_t @@ apply_subst t1 ;
+                        Printf.printf "%s| - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
 
-                | NotCallable t ->
-                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
-                    Printf.printf "%s- type is not callable: %s\n" ind t ;
+                    | NotIndexable t ->
+                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        Printf.printf "type is not indexable: %s\n" t ;
 
-                | NotSexp t ->
-                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
-                    Printf.printf "%s- type is not S-expression type: %s\n" ind t ;
+                    | NotCallable t ->
+                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        Printf.printf "type is not callable: %s\n" t ;
 
-                | WrongArgsNum (t, n) ->
-                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
-                    Printf.printf "%s- wrong number of arguments (given %d) in call: %s\n" ind n t ;
+                    | NotMatchable (t, ps) ->
+                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        Printf.printf "type is not matchable with following patterns: %s\n" t ;
+
+                        let f p = T.Type.show_p @@ apply_subst#p T.Type.IS.empty p in
+                        let ps = List.map f ps in
+
+                        List.iter (Printf.printf "%s| - %s\n" ind) ps
+
+                    | NotSexp t ->
+                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        Printf.printf "type is not S-expression type: %s\n" t ;
+
+                    | WrongArgsNum (t, n) ->
+                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        Printf.printf "wrong number of arguments (given %d) in call: %s\n" n t ;
+
+                    | NotSupported ->
+                        let c = T.Type.show_c @@ apply_subst#c T.Type.IS.empty c in
+                        Printf.printf "constraint solving is not supported: %s\n" c ;
+                    end ;
+
+                    let c = c :: inf.parents in
+                    let c = List.map (apply_subst#c T.Type.IS.empty) c in
+
+                    Printf.printf "%s+ failed constraint solution trace:\n" ind ;
+                    List.iter (fun c -> Printf.printf "%s| - %s\n" ind @@ T.Type.show_c c) c ;
                 in
 
-                Printf.printf "Type inference failed at %s:\n" (show_c_info_short @@ inf) ;
-
+                Printf.printf "Type inference failed:\n" ;
                 print_err "" err ;
-
-                let c = c :: inf.parents in
-                let c = List.map (apply_subst#c T.Type.IS.empty) c in
-
-                print_endline "Failed constraint solution trace:" ;
-                List.iter (fun c -> Printf.printf "- %s\n" @@ T.Type.show_c c) c ;
 
                 exit 1
             end
