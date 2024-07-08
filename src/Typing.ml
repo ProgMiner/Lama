@@ -200,7 +200,7 @@ module Type = struct
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s)" (show_list show_t @@ t :: ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
-    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s, %s)" x (show_t t) (show_list show_t ts)
+    | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
 
     (* logic type variables with no respect to substitution *)
 
@@ -733,6 +733,7 @@ module Type = struct
         | Unification of t * t
         | NotIndexable of t
         | NotCallable of t
+        | NotSexp of t
         | WrongArgsNum of t * int
 
         exception Failure of fail * c_aux * Subst.t
@@ -818,22 +819,45 @@ module Type = struct
                         (apply_subst st.s)#t IS.empty ft
                     in
 
-                    (* Printf.printf "ARROW TYPE: %s\n" @@ show_t @@ `Arrow (xs, fc, fts, ft) ; *)
-
                     let xs = IM.of_seq @@ Seq.map (fun x -> x, new_var ()) @@ IS.to_seq xs in
                     let gtol = gvars_to_lvars level xs in
 
-                    let fc = List.map (gtol#c IS.empty) fc in
-                    let fts = List.map (gtol#t IS.empty) fts in
-                    let ft = gtol#t IS.empty ft in
+                    (* try-with to catch Failure from `gtol` *)
 
-                    let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
-                    let c = `Eq (ft, t) :: c in
-                    let c = fc @ c in
+                    try
+                        (* Printf.printf "ARROW TYPE: %s\n" @@ show_t @@ `Arrow (xs, fc, fts, ft) ; *)
 
-                    Some (c, st)
+                        let fc = List.map (gtol#c IS.empty) fc in
+                        let fts = List.map (gtol#t IS.empty) fts in
+                        let ft = gtol#t IS.empty ft in
+
+                        let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
+                        let c = `Eq (ft, t) :: c in
+                        let c = fc @ c in
+
+                        Some (c, st)
+
+                    with Stdlib.Failure _ -> None
 
                 | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
+                end
+
+            | `Sexp (x, t, ts) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) ->
+                    (* we act like Sexp(LVar) is non-deterministic constraint to preserve Sexp
+                     * constraints under binder of arrow type and to prevent eager
+                     * monomorphization of all S-expression types
+                     *)
+
+                    single_step_lvar st l c_aux
+
+                | `Sexp _ ->
+                    let xs = SexpConstructors.singleton (x, List.length ts) ts in
+                    let t' = `Sexp (xs, Some (new_var ())) in
+                    Some ([`Eq (t, t')], st)
+
+                | _ -> raise @@ Failure (NotSexp t, c_aux, st.s)
                 end
 
             | c -> failwith @@ "TODO " ^ show_c c
@@ -850,7 +874,16 @@ module Type = struct
 
         let one_step_nondet st =
             let rec hlp cs' : c_aux list -> (c_aux list * st) list * c_aux = function
-            | [] -> failwith "BUG: no solutions" ;
+            | [] ->
+                (*
+                let cs = List.rev cs' in
+                let apply_subst = (apply_subst st.s)#c IS.empty in
+                let cs = List.map (fun (c, _) -> apply_subst c) cs in
+                Printf.printf "CONSTRAINTS: %s\n" @@ show_list show_c cs ;
+                *)
+
+                failwith "BUG: no solutions"
+
             | c :: cs ->
                 match single_step_nondet st c with
                 | [] -> hlp (c :: cs') cs

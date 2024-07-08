@@ -314,6 +314,10 @@ let[@ocaml.warning "-32"] main =
                     let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
                     Printf.printf "%s- type is not callable: %s\n" ind t ;
 
+                | NotSexp t ->
+                    let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                    Printf.printf "%s- type is not S-expression type: %s\n" ind t ;
+
                 | WrongArgsNum (t, n) ->
                     let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
                     Printf.printf "%s- wrong number of arguments (given %d) in call: %s\n" ind n t ;
