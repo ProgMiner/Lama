@@ -762,15 +762,15 @@ module Type = struct
             idx
         in
 
-        let single_step_lvar st l (c, inf : c_aux) =
-            if l < level then
-                let s = (lift_lvars var_gen l)#c IS.empty c st.s in
-                Some ([], { s ; r = (c, inf) :: st.r })
-
-            else None
-        in
-
         let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
+            let handle_lvar st l (c, inf : c_aux) =
+                if l < level then
+                    let s = (lift_lvars var_gen l)#c IS.empty c st.s in
+                    Some ([], { s ; r = (c, inf) :: st.r })
+
+                else None
+            in
+
             match c with
             | `Eq (t1, t2) -> begin try
                 let s, r = unify#t (t1, t2) (st.s, []) in
@@ -784,7 +784,7 @@ module Type = struct
 
             | `Ind (t1, t2) ->
                 begin match shaps st.s t1 with
-                | `LVar (_, l) -> single_step_lvar st l c_aux
+                | `LVar (_, l) -> handle_lvar st l c_aux
                 | `String -> Some ([`Eq (t2, `Int)], st)
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
                 | `Sexp _ -> failwith "TODO: Ind(Sexp)"
@@ -805,7 +805,7 @@ module Type = struct
                      *)
 
                     let level = if level mod 2 = 0 then Int.max 0 @@ level - 1 else level in
-                    single_step_lvar st (Int.max l level) c_aux
+                    handle_lvar st (Int.max l level) c_aux
 
                 | `Arrow (_, _, fts, _) ->
                     begin
@@ -824,12 +824,26 @@ module Type = struct
 
                     (* try-with to catch Failure from `gtol` *)
 
-                    try
-                        (* Printf.printf "ARROW TYPE: %s\n" @@ show_t @@ `Arrow (xs, fc, fts, ft) ; *)
+                    begin try
+                        let fc, fts, ft =
+                            (* special case when no bound variables in function type
+                             *
+                             * in this case we have no need to refresh variables and able
+                             * to allow logic variables in type
+                             *)
 
-                        let fc = List.map (gtol#c IS.empty) fc in
-                        let fts = List.map (gtol#t IS.empty) fts in
-                        let ft = gtol#t IS.empty ft in
+                            if IM.is_empty xs then fc, fts, ft else begin
+                                (*
+                                Printf.printf "ARROW TYPE: %s\n" @@ show_t
+                                    @@ `Arrow (xs, fc, fts, ft) ;
+                                *)
+
+                                let fc = List.map (gtol#c IS.empty) fc in
+                                let fts = List.map (gtol#t IS.empty) fts in
+                                let ft = gtol#t IS.empty ft in
+                                fc, fts, ft
+                            end
+                        in
 
                         let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
                         let c = `Eq (ft, t) :: c in
@@ -838,6 +852,7 @@ module Type = struct
                         Some (c, st)
 
                     with Stdlib.Failure _ -> None
+                    end
 
                 | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
                 end
@@ -850,7 +865,7 @@ module Type = struct
                      * monomorphization of all S-expression types
                      *)
 
-                    single_step_lvar st l c_aux
+                    handle_lvar st l c_aux
 
                 | `Sexp _ ->
                     let xs = SexpConstructors.singleton (x, List.length ts) ts in
@@ -863,8 +878,47 @@ module Type = struct
             | c -> failwith @@ "TODO " ^ show_c c
         in
 
-        let single_step_nondet st (c, inf : c_aux) : (c list * st) list = match c with
-        | _ -> Option.to_list @@ single_step_det st (c, inf)
+        let single_step_nondet st (c, inf : c_aux) : (c list * st) list =
+            let gen =
+                let f (t1, t2) = `Eq (t1, t2) in
+
+                (* we preserve `c` to delegate main work to deterministic steps *)
+                let f eqs = List.map f eqs @ [c], st in
+
+                List.map f
+            in
+
+            match c with
+            | `Ind (t1, t2) ->
+                begin match shaps st.s t1 with
+                | `LVar (_, l) when l >= level ->
+                    let row = new_var () in
+
+                    gen [ [t1, `String]
+                        ; [t1, `Array t2]
+                        ; [t1, `Sexp (SexpConstructors.empty, Some row)]
+                        ]
+
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
+            | `Call (ft, ts, t) ->
+                begin match shaps st.s ft with
+                | `LVar (_, l) when l >= level -> gen [[ft, `Arrow (IS.empty, [], ts, t)]]
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
+            | `Sexp (_, t, _) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) when l >= level ->
+                    let row = new_var () in
+
+                    gen [[t, `Sexp (SexpConstructors.empty, Some row)]]
+
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
+            | _ -> Option.to_list @@ single_step_det st (c, inf)
         in
 
         let one_step_f cs' cs (c, inf : c_aux) (new_cs, st) =
