@@ -828,7 +828,7 @@ module Type = struct
         exception Failure of fail
     end
 
-    let simplify var_gen level =
+    let simplify var_gen params_level level =
         let open Simpl in
 
         let unify = unify var_gen level in
@@ -1006,67 +1006,86 @@ module Type = struct
                 end
 
             | `Call (ft, ts, t) ->
-                begin match shaps st.s ft with
-                | `LVar (_, l) ->
-                    (* dirty hack to support polymorphism in recursive functions
-                     *
-                     * here we utilize the fact that odd levels are special levels for parameters
-                     * and force Call-s to stay under forall binder to prevent lifting of argument
-                     * types
+                (* since we need full substitution application in most cases, do it at start *)
+                let ft' = (apply_subst st.s)#t IS.empty ft in
+
+                (* if we have highlevel variables, we unable to refresh type on current level *)
+                let ft_has_highlevel_lvars =
+                    let lvars = (lvars @@ fun l -> l < level)#t IS.empty IS.empty ft' in
+                    not @@ IS.is_empty lvars
+                in
+
+                (* if we have lowlevel variables, we unable to refresh type now *)
+                let ft_has_lowlevel_lvars =
+                    let lvars = (lvars @@ fun l -> l >= level)#t IS.empty IS.empty ft' in
+                    not @@ IS.is_empty lvars
+                in
+
+                (* if we haven't bound variables, we haven't need to refreshing type *)
+                let ft_has_bound_vars =
+                    let rec f = function
+                    | `LVar _ -> true (* may have bound variables *)
+                    | `Arrow (xs, _, _, _) -> not @@ IS.is_empty xs
+                    | `Mu (_, t) -> f t
+                    | _ -> false
+                    in
+
+                    f ft'
+                in
+
+                begin match ft' with
+                | _ when ft_has_highlevel_lvars && ft_has_bound_vars ->
+                    (* here we utilize the fact that there is special level for parameters
+                     * and force Call-s to stay under forall binder to prevent lifting
+                     * of argument types
                      *
                      * it make we able to infer polymorphic functions that uses recursion, because
                      * if argument types lifted too much, they will be monomorphized any way...
                      *)
 
-                    let level = if level mod 2 = 0 then Int.max 0 @@ level - 1 else level in
-                    handle_lvar st (Int.max l level) c_aux
+                    handle_lvar st params_level c_aux
 
-                | `Arrow (_, _, fts, _) ->
+                | _ when ft_has_lowlevel_lvars && ft_has_bound_vars -> None
+
+                (* TODO: think about recursive Call-s... *)
+                | `Arrow (xs, fc, fts, ft) ->
                     begin
                         let args_num = List.length ts in
                         if args_num <> List.length fts then
-                            raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
+                            raise @@ Failure (WrongArgsNum (ft', args_num), c_aux, st.s)
                     end ;
 
-                    (* TODO: think about recursive Call-s... *)
-                    let [@warning "-8"] `Arrow (xs, fc, fts, ft) : t =
-                        (apply_subst st.s)#t IS.empty ft
+                    let fc, fts, ft =
+                        (* special case when no bound variables in function type
+                         *
+                         * in this case we have no need to refresh variables
+                         * and able to allow logic variables in type
+                         *)
+
+                        if IS.is_empty xs then fc, fts, ft else begin
+                            let gtol =
+                                let f x = x, new_var () in
+                                let xs = IM.of_seq @@ Seq.map f @@ IS.to_seq xs in
+                                gvars_to_lvars level xs
+                            in
+
+                            (*
+                            Printf.printf "ARROW TYPE: %s\n" @@ show_t
+                                @@ `Arrow (xs, fc, fts, ft) ;
+                            *)
+
+                            let fc = List.map (gtol#c IS.empty) fc in
+                            let fts = List.map (gtol#t IS.empty) fts in
+                            let ft = gtol#t IS.empty ft in
+                            fc, fts, ft
+                        end
                     in
 
-                    let xs = IM.of_seq @@ Seq.map (fun x -> x, new_var ()) @@ IS.to_seq xs in
-                    let gtol = gvars_to_lvars level xs in
+                    let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
+                    let c = `Eq (ft, t) :: c in
+                    let c = fc @ c in
 
-                    (* try-with to catch Failure from `gtol` *)
-
-                    begin try
-                        let fc, fts, ft =
-                            (* special case when no bound variables in function type
-                             *
-                             * in this case we have no need to refresh variables and able
-                             * to allow logic variables in type
-                             *)
-
-                            if IM.is_empty xs then fc, fts, ft else begin
-                                (*
-                                Printf.printf "ARROW TYPE: %s\n" @@ show_t
-                                    @@ `Arrow (xs, fc, fts, ft) ;
-                                *)
-
-                                let fc = List.map (gtol#c IS.empty) fc in
-                                let fts = List.map (gtol#t IS.empty) fts in
-                                let ft = gtol#t IS.empty ft in
-                                fc, fts, ft
-                            end
-                        in
-
-                        let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
-                        let c = `Eq (ft, t) :: c in
-                        let c = fc @ c in
-
-                        Some (c, st)
-
-                    with Stdlib.Failure _ -> None
-                    end
+                    Some (c, st)
 
                 | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
                 end
@@ -1371,7 +1390,8 @@ module Type = struct
                 let c, t = infer_t ctx' b in
 
                 let Simpl.{ s; r = c } =
-                    let simplify = simplify prev_var_idx !current_level in
+                    let level = !current_level in
+                    let simplify = simplify prev_var_idx (level - 1) level in
                     simplify#run @@ simplify#full c
                 in
 
@@ -1387,7 +1407,8 @@ module Type = struct
                 current_level := !current_level - 1 ;
 
                 let bc, Simpl.{ s; r = fc } =
-                    let simplify = simplify prev_var_idx !current_level in
+                    let level = !current_level in
+                    let simplify = simplify prev_var_idx level level in
                     simplify#run ~s @@ simplify#full_deterministic c
                 in
 
@@ -1520,7 +1541,7 @@ module Type = struct
             method decl = infer_decl
             method decls = infer_decls
 
-            method simplify = simplify prev_var_idx
+            method simplify = simplify prev_var_idx 0
 
             method public_names () = !public_names
             method all_decls () = !current_decls
