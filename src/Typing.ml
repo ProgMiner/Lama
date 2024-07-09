@@ -520,8 +520,13 @@ module Type = struct
 
         | `Mu (x, t) -> lift_t (IS.add x bvs) t
 
-        and lift_sexp bvs ((xs, _) : sexp) : Mut.t =
-            SexpConstructors.fold (fun _ ts s -> List.fold_left (Fun.flip @@ lift_t bvs) s ts) xs
+        and lift_sexp bvs ((xs, row) : sexp) : Mut.t = fun s ->
+            let f _ ts s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
+            let s = SexpConstructors.fold f xs s in
+
+            match Option.bind row @@ Fun.flip Subst.find_sexp s with
+            | Some xs -> lift_sexp bvs xs s
+            | None -> s
 
         and lift_p bvs : p -> Mut.t = function
         | `Wildcard -> Fun.id
@@ -554,6 +559,78 @@ module Type = struct
             method sexp = lift_sexp
             method p = lift_p
             method c = lift_c
+        end
+
+    (* check has term recursion in substitution *)
+
+    let has_recursion s =
+        let path = Stdlib.ref IS.empty in
+
+        let rec is_rec_t bvs : t -> bool = function
+        | `GVar x ->
+            if not @@ IS.mem x bvs then failwith "has_recursion: free ground variable" ;
+            false
+
+        | `LVar (x, l) ->
+            if IS.mem x bvs then failwith "has_recursion: bound logic variable" ;
+
+            let old_path = !path in
+
+            if IS.mem x old_path then true else begin match Subst.find_type x s with
+            | None -> false
+            | Some t ->
+                path := IS.add x old_path ;
+
+                let res = is_rec_t bvs t in
+
+                path := old_path ;
+
+                res
+            end
+
+        | `Int -> false
+        | `String -> false
+        | `Array t -> is_rec_t bvs t
+        | `Sexp xs -> is_rec_sexp bvs xs
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            List.exists (is_rec_c bvs) c || List.exists (is_rec_t bvs) ts || is_rec_t bvs t
+
+        | `Mu (x, t) -> is_rec_t (IS.add x bvs) t
+
+        and is_rec_sexp bvs ((xs, row) : sexp) : bool =
+            if SexpConstructors.exists (fun _ -> List.exists @@ is_rec_t bvs) xs then true else
+                begin match Option.bind row @@ Fun.flip Subst.find_sexp s with
+                | Some xs -> is_rec_sexp bvs xs
+                | None -> false
+                end
+
+        and is_rec_p bvs : p -> bool = function
+        | `Wildcard -> false
+        | `Typed (t, p) -> is_rec_t bvs t || is_rec_p bvs p
+        | `Array ps -> List.exists (is_rec_p bvs) ps
+        | `Sexp (_, ps) -> List.exists (is_rec_p bvs) ps
+        | `Boxed -> false
+        | `Unboxed -> false
+        | `StringTag -> false
+        | `ArrayTag -> false
+        | `SexpTag -> false
+        | `FunTag -> false
+
+        and is_rec_c bvs : c -> bool = function
+        | `Eq (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
+        | `Ind (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
+        | `Call (t, ts, t') -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts || is_rec_t bvs t'
+        | `Match (t, ps) -> is_rec_t bvs t || List.exists (is_rec_p bvs) ps
+        | `Sexp (_, t, ts) -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts
+        in
+
+        object
+
+            method t = is_rec_t
+            method sexp = is_rec_sexp
+            method p = is_rec_p
+            method c = is_rec_c
         end
 
     (* unification, returns substitution and residual equations *)
@@ -780,8 +857,6 @@ module Type = struct
             idx
         in
 
-        let exception Match_failure in
-
         let rec match_t : p * t -> (t list * (t * p) list) option = function
         | `Wildcard, `Int -> Some ([], [])
         | `Wildcard, `String -> Some ([], [])
@@ -855,6 +930,8 @@ module Type = struct
             fun xs -> List.of_seq @@ hlp (List.to_seq [[]]) xs
         in
 
+        let exception Match_failure in
+
         let match_t_ast st t ps t' : c list * st =
             let ps = List.filter_map (fun p -> match_t (p, t')) ps in
 
@@ -880,10 +957,14 @@ module Type = struct
              *)
 
             let ps = List.map (fun (t, ps) -> t, product_lists ps) ps in
+
+            (* remove fully Wildcard Match-s to prevent infinite recursion on recursive types *)
+            let ps =
+                let f ps = List.exists (fun p -> p <> `Wildcard) ps in
+                List.map (fun (t, ps) -> t, List.filter f ps) ps
+            in
+
             let ps = List.concat_map (fun (t, ps) -> List.map (fun ps -> `Match (t, ps)) ps) ps in
-
-            (* TODO: think about recursive types matching... *)
-
             eqs @ ps, st
         in
 
