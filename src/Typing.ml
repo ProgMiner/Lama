@@ -488,6 +488,8 @@ module Type = struct
             idx
         in
 
+        let visited = Stdlib.ref IS.empty in
+
         let module Mut = struct
 
             type t = Subst.t -> Subst.t
@@ -501,11 +503,17 @@ module Type = struct
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "lift_lvars: bound logic variable" ;
 
-            if l <= level then Fun.id else fun s ->
-                begin match Subst.find_type x s with
-                | None -> let x' = new_var () in Subst.bind_type x (`LVar (x', level)) s
-                | Some t -> lift_t bvs t s
-                end
+            let old_visited = !visited in
+
+            if IS.mem x old_visited then Fun.id else begin
+                visited := IS.add x old_visited ;
+
+                if l <= level then Fun.id else fun s ->
+                    begin match Subst.find_type x s with
+                    | None -> let x' = new_var () in Subst.bind_type x (`LVar (x', level)) s
+                    | Some t -> lift_t bvs t s
+                    end
+            end
 
         | `Int -> Fun.id
         | `String -> Fun.id
