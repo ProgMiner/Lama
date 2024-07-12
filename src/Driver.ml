@@ -244,7 +244,7 @@ let[@ocaml.warning "-32"] main =
 
             begin try
                 let infer = T.Type.infer () in
-                let c, _ = infer#term ctx prog' in
+                let (c, _), s = infer#term ctx prog' T.Type.Subst.empty in
                 let decls = infer#all_decls () in
 
                 print_endline "Inferred constraints:" ;
@@ -255,7 +255,7 @@ let[@ocaml.warning "-32"] main =
                 print_decls decls ;
 
                 let simplify = infer#simplify 0 in
-                let T.Type.Simpl.{ s; r = c } = simplify#run @@ simplify#full c in
+                let T.Type.Simpl.{ s; r = c } = simplify#run s @@ simplify#full c in
 
                 (*
                 print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->

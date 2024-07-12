@@ -112,6 +112,8 @@ module Type = struct
 
     module SexpConstructors = Map.Make(SexpLabel)
 
+    (* TODO: maybe GVar will be more useful in de Bruijn encoding? *)
+
     type t = [
     | `GVar     of int              (* ground type variable *)
     | `LVar     of int * int        (* logic type variable *)
@@ -322,7 +324,7 @@ module Type = struct
             end
 
         | `LVar (_, l) as t ->
-            if l >= level then failwith "gvars_to_lvars: logic variable occurred" ;
+            (* assume that there aren't any logic variables that could contain ground variables *)
             t
 
         | `Int -> `Int
@@ -384,11 +386,15 @@ module Type = struct
         | Sexp t -> t
         | _ -> failwith "unpack_sexp: not a row variable"
 
-        let find_type x s = Option.map unpack_type @@ find x s
-        let find_sexp x s = Option.map unpack_sexp @@ find x s
+        let find_row_var row s = fst @@ find_var (row, 0) s
+
+        let find_type x s = Option.map unpack_type @@ find_term x s
+        let find_sexp x s = Option.map unpack_sexp @@ find_term (x, 0) s
+
+        let bind_row_vars row1 row2 s = bind_vars (row1, 0) (row2, 0) s
 
         let bind_type v t = bind_term v @@ Type t
-        let bind_sexp v t = bind_term v @@ Sexp t
+        let bind_sexp v t = bind_term (v, 0) @@ Sexp t
     end
 
     let apply_subst s =
@@ -402,6 +408,8 @@ module Type = struct
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "apply_subst: bound logic variable" ;
 
+            let x, l = Subst.find_var (x, l) s in
+
             let old_vars_path = !vars_path in
 
             if IM.mem x old_vars_path then begin
@@ -410,11 +418,8 @@ module Type = struct
                 `GVar x
 
             end else begin
-                match Subst.find_type x s with
-                | None ->
-                    (* here level may be wrong if substitution applied on several levels! *)
-                    `LVar (Subst.find_var x s, l)
-
+                match Subst.find_type (x, l) s with
+                | None -> `LVar (x, l)
                 | Some t ->
                     vars_path := IM.add x false old_vars_path ;
 
@@ -442,7 +447,9 @@ module Type = struct
         and subst_sexp bvs (xs, row) =
             let xs = SexpConstructors.map (List.map @@ subst_t bvs) xs in
 
-            match Option.bind row @@ fun row -> Subst.find_sexp row s with
+            let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
+
+            match Option.bind row @@ Fun.flip Subst.find_sexp s with
             | None -> xs, row
             | Some (xs', row') ->
                 let f _ _ _ = failwith "apply_subst: intersecting constructors in S-exp" in
@@ -503,17 +510,22 @@ module Type = struct
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "lift_lvars: bound logic variable" ;
 
-            let old_visited = !visited in
+            fun s ->
+                let x, l = Subst.find_var (x, l) s in
 
-            if IS.mem x old_visited then Fun.id else begin
-                visited := IS.add x old_visited ;
+                let old_visited = !visited in
 
-                if l <= level then Fun.id else fun s ->
-                    begin match Subst.find_type x s with
-                    | None -> let x' = new_var () in Subst.bind_type x (`LVar (x', level)) s
-                    | Some t -> lift_t bvs t s
-                    end
-            end
+                if IS.mem x old_visited then s else begin
+                    visited := IS.add x old_visited ;
+
+                    if l <= level then s else
+                        begin match Subst.find_type (x, l) s with
+                        | Some t -> lift_t bvs t s
+                        | None ->
+                            let x' = new_var () in
+                            Subst.bind_vars (x, l) (x', level) s
+                        end
+                end
 
         | `Int -> Fun.id
         | `String -> Fun.id
@@ -528,9 +540,11 @@ module Type = struct
 
         | `Mu (x, t) -> lift_t (IS.add x bvs) t
 
-        and lift_sexp bvs ((xs, row) : sexp) : Mut.t = fun s ->
+        and lift_sexp bvs (xs, row : sexp) : Mut.t = fun s ->
             let f _ ts s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
             let s = SexpConstructors.fold f xs s in
+
+            let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
 
             match Option.bind row @@ Fun.flip Subst.find_sexp s with
             | Some xs -> lift_sexp bvs xs s
@@ -582,9 +596,11 @@ module Type = struct
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "has_recursion: bound logic variable" ;
 
+            let x, l = Subst.find_var (x, l) s in
+
             let old_path = !path in
 
-            if IS.mem x old_path then true else begin match Subst.find_type x s with
+            if IS.mem x old_path then true else begin match Subst.find_type (x, l) s with
             | None -> false
             | Some t ->
                 path := IS.add x old_path ;
@@ -608,6 +624,8 @@ module Type = struct
 
         and is_rec_sexp bvs ((xs, row) : sexp) : bool =
             if SexpConstructors.exists (fun _ -> List.exists @@ is_rec_t bvs) xs then true else
+                let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
+
                 begin match Option.bind row @@ Fun.flip Subst.find_sexp s with
                 | Some xs -> is_rec_sexp bvs xs
                 | None -> false
@@ -646,7 +664,7 @@ module Type = struct
     exception Unification_failure of Subst.t * t * t
     exception Sexp_unification_failure of Subst.t
 
-    let unify var_gen level =
+    let unify var_gen =
         let new_var () =
             let idx = !var_gen + 1 in
             var_gen := idx ;
@@ -656,55 +674,47 @@ module Type = struct
 
         let module Mut = struct
 
-            type x = Subst.t * (t * t) list
-            type t = x -> x
+            type t = Subst.t -> Subst.t
         end in
 
         let rec unify_t : t * t -> Mut.t = function
 
-        (* === lowlevel var vs lowlevel var === *)
-
-        | `LVar (x, l), `LVar (y, k) when l >= level && k >= level ->
-            fun (s, r) -> begin
-                try Subst.bind_vars x y s, r
-                with Subst.Need_unification (t1, t2) ->
-                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) (s, r)
-            end
-
-        (* === lowlevel var vs term === *)
-
-        | `LVar (x, l), t when l >= level ->
-            fun (s, r) -> begin
-                try Subst.bind_type x t s, r
-                with Subst.Need_unification (t1, t2) ->
-                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) (s, r)
-            end
-
-        | t1, (`LVar (_, l) as t2) when l >= level -> unify_t (t2, t1)
-
-        (* === highlevel vars === *)
+        (* === var vs var === *)
 
         | `LVar (x, l), `LVar (y, k) when x = y ->
             if l <> k then failwith "unify: same variable on different levels" ;
             Fun.id
 
-        | `LVar (_, l) as t1, (`LVar (_, k) as t2) when l > k -> unify_t (t2, t1)
-        | `LVar (_, l) as t1, t2 ->
-            (*  example: lv_1^0 = [lv_2^1]
-             *  result:  lv_1^0 = [lv_3^0] and lv_2^1 |-> lv_3^0
-             *
-             *  we need to <<refresh>> lowlevel variables in type `t` with highlevel ones
-             *  and record refreshing in result substitution (lv_2^1 |-> lv_3^0),
-             *  as a residual we record refreshed equation (lv_1^0 = [lv_3^0])
-             *
-             *  !!! same operation we need to do with all residual constraints below !!!
-             *)
+        | `LVar (x, l), `LVar (y, k) ->
+            fun s -> begin
+                (* `bind_vars` respects leveling *)
+                try Subst.bind_vars (x, l) (y, k) s
+                with Subst.Need_unification (t1, t2) ->
+                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
+            end
 
-            fun (s, r) ->
-                let s = (lift_lvars var_gen l)#t IS.empty t2 s in
-                s, (t1, t2) :: r
+        (* === var vs term === *)
 
-        | t1, (`LVar (_, _) as t2) -> unify_t (t2, t1)
+        | `LVar (x, l), t ->
+            fun s -> begin
+                (*  example: lv_1^0 = [lv_2^1]
+                 *  result:  lv_1^0 = [lv_3^0] and lv_2^1 |-> lv_3^0
+                 *
+                 *  we need to <<refresh>> lowlevel variables in type `t` with highlevel ones
+                 *  and record refreshing in result substitution (lv_2^1 |-> lv_3^0),
+                 *  after that we solve the refreshed equation (lv_1^0 = [lv_3^0])
+                 *
+                 *  !!! same operation we need to do with all residual constraints below !!!
+                 *)
+
+                let s = (lift_lvars var_gen l)#t IS.empty t s in
+
+                try Subst.bind_type (x, l) t s
+                with Subst.Need_unification (t1, t2) ->
+                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
+            end
+
+        | t1, (`LVar _ as t2) -> unify_t (t2, t1)
 
         (* === term vs term === *)
 
@@ -713,21 +723,24 @@ module Type = struct
         | `String, `String -> Fun.id
         | `Array t1, `Array t2 -> unify_t (t1, t2)
         | `Sexp xs1, `Sexp xs2 ->
-            begin try unify_sexp (xs1, xs2)
-            with Sexp_unification_failure s ->
-                raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
-            end
+            let unify_sexp = unify_sexp (xs1, xs2) in
+
+            fun s ->
+                begin try unify_sexp s
+                with Sexp_unification_failure s ->
+                    raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
+                end
 
         | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) -> failwith "TODO: unify arrows"
         | `Mu (x1, t1), `Mu (x2, t2) -> failwith "TODO: unify recursive types"
-        | t1, t2 -> fun (s, _) -> raise @@ Unification_failure (s, t1, t2)
+        | t1, t2 -> fun s -> raise @@ Unification_failure (s, t1, t2)
 
         and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
             let rec bind_rows s = function
             | None, None -> s
             | Some row1, None -> Subst.bind_sexp row1 (SexpConstructors.empty, None) s
             | None, Some row2 -> bind_rows s (Some row2, None)
-            | Some row1, Some row2 -> Subst.bind_vars row1 row2 s
+            | Some row1, Some row2 -> Subst.bind_row_vars row1 row2 s
             in
 
             let bind_row_sexp s = function
@@ -742,15 +755,15 @@ module Type = struct
             let xs1'empty = SexpConstructors.is_empty xs1 in
             let xs2'empty = SexpConstructors.is_empty xs2 in
 
-            if xs1'empty && xs2'empty then begin fun (s, r) ->
-                try bind_rows s (row1, row2), r
+            if xs1'empty && xs2'empty then begin fun s ->
+                try bind_rows s (row1, row2)
                 with Subst.Need_unification (t1, t2) ->
-                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) (s, r)
+                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
-            end else if xs1'empty then begin fun (s, r) ->
-                try bind_row_sexp s (row1, (xs2, row2)), r
+            end else if xs1'empty then begin fun s ->
+                try bind_row_sexp s (row1, (xs2, row2))
                 with Subst.Need_unification (t1, t2) ->
-                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) (s, r)
+                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs2'empty then begin
                 unify_sexp ((xs2, row2), (xs1, row1))
@@ -831,20 +844,25 @@ module Type = struct
     let simplify var_gen params_level level =
         let open Simpl in
 
-        let unify = unify var_gen level in
+        let unify = unify var_gen in
 
         (* shaps = SHallow APply Substitution *)
+        (* TODO: unfold Mu types *)
         let rec shaps s = function
-        | `LVar (x, _) as t ->
-            begin match Subst.find_type x s with
+        | `LVar (x, l) ->
+            let x, l = Subst.find_var (x, l) s in
+
+            begin match Subst.find_type (x, l) s with
             | Some t -> shaps s t
-            | None -> t
+            | None -> `LVar (x, l)
             end
 
         | `Sexp (xs, row) ->
             let rec shaps_sexp acc : int option -> sexp = function
             | None -> acc, None
             | Some row ->
+                let row = Subst.find_row_var row s in
+
                 match Subst.find_sexp row s with
                 | None -> acc, Some row
                 | Some (xs, row) ->
@@ -976,7 +994,7 @@ module Type = struct
             eqs @ ps, st
         in
 
-        let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
+        let single_step_det st (c, _ as c_aux : c_aux) : (c list * st) option =
             let handle_lvar st l (c, inf : c_aux) =
                 if l < level then
                     let s = (lift_lvars var_gen l)#c IS.empty c st.s in
@@ -987,10 +1005,9 @@ module Type = struct
 
             match c with
             | `Eq (t1, t2) -> begin try
-                let s, r = unify#t (t1, t2) (st.s, []) in
+                let s = unify#t (t1, t2) st.s in
 
-                let r = List.map (fun (t1, t2) -> `Eq (t1, t2), inf ) r in
-                Some ([], { s = s; r = r @ st.r })
+                Some ([], { st with s })
 
                 with Unification_failure (s, t1, t2) ->
                     raise @@ Failure (Unification (t1, t2), c_aux, s)
@@ -1260,8 +1277,8 @@ module Type = struct
             method full_deterministic = full_deterministic
             method full = full
 
-            method run : 'a. ?s : Subst.t -> (st -> 'a) -> 'a =
-                fun ?(s=Subst.empty) f -> f { s = s; r = [] }
+            method run : 'a. Subst.t -> (st -> 'a) -> 'a =
+                fun s f -> f { s = s; r = [] }
         end
 
     (* type inferrer *)
@@ -1318,7 +1335,33 @@ module Type = struct
             List.rev ps, ctx
         in
 
-        let rec infer_t ctx (e, inf : Expr.expr) : c_aux list * t =
+        let module St = struct
+
+            type 'a t = Subst.t -> 'a * Subst.t
+
+            let return x s = (x, s)
+            let bind m k s = let x, s = m s in k x s
+
+            let traverse f ini xs s =
+                let f (acc, s) x = let acc, s = f acc x s in acc, s in
+                let res, s = List.fold_left f (ini, s) xs in
+                res, s
+
+            module Syntax = struct
+
+                let (let*) = bind
+            end
+
+            let map_m f xs =
+                let open Syntax in
+                let f xs x = let* x = f x in return (x :: xs) in
+                let* xs = traverse f [] xs in
+                return @@ List.rev xs
+        end in
+
+        let open St.Syntax in
+
+        let rec infer_t ctx (e, inf : Expr.expr) : (c_aux list * t) St.t =
             let return c = c, { path = !current_path ; pos = inf.pos ; parents = [] } in
 
             match e with
@@ -1330,50 +1373,50 @@ module Type = struct
 
                 if name_in_path then current_path := inf.name :: !current_path ;
 
-                let c1, ctx = infer_decls ctx ds in
-                let c2, t = infer_t ctx e in
+                let* c1, ctx = infer_decls ctx ds in
+                let* c2, t = infer_t ctx e in
 
                 current_decls := List.rev !current_decls ;
 
                 if name_in_path then current_path := List.tl !current_path ;
 
-                c1 @ c2, t
+                St.return (c1 @ c2, t)
 
             | E.Seq (l, r) ->
-                let c1, _ = infer_t ctx l in
-                let c2, t = infer_t ctx r in
-                c1 @ c2, t
+                let* c1, _ = infer_t ctx l in
+                let* c2, t = infer_t ctx r in
+                St.return (c1 @ c2, t)
 
             | E.Assign (l, r) ->
-                let c1, t = infer_t ctx l in
-                let c2, t' = infer_t ctx r in
-                return (`Eq (t, t')) :: c1 @ c2, t
+                let* c1, t = infer_t ctx l in
+                let* c2, t' = infer_t ctx r in
+                St.return (return (`Eq (t, t')) :: c1 @ c2, t)
 
             | E.Binop (l, r) ->
-                let c1, t1 = infer_t ctx l in
-                let c2, t2 = infer_t ctx r in
-                return (`Eq (t1, `Int)) :: return (`Eq (t2, `Int)) :: c1 @ c2, `Int
+                let* c1, t1 = infer_t ctx l in
+                let* c2, t2 = infer_t ctx r in
+                St.return (return (`Eq (t1, `Int)) :: return (`Eq (t2, `Int)) :: c1 @ c2, `Int)
 
             | E.Call (f, xs) ->
-                let c, t = infer_t ctx f in
-                let cts = List.map (infer_t ctx) xs in
+                let* c, t = infer_t ctx f in
+                let* cts = St.map_m (infer_t ctx) xs in
                 let c = List.concat_map fst cts @ c in
 
-                let s = new_tv () in
-                return (`Call (t, List.map snd cts, s)) :: c, s
+                let t' = new_tv () in
+                St.return (return (`Call (t, List.map snd cts, t')) :: c, t')
 
             | E.Subscript (x, i) ->
-                let c1, t1 = infer_t ctx x in
-                let c2, t2 = infer_t ctx i in
+                let* c1, t1 = infer_t ctx x in
+                let* c2, t2 = infer_t ctx i in
 
-                let s = new_tv () in
-                return (`Eq (t2, `Int)) :: return (`Ind (t1, s)) :: c1 @ c2, s
+                let t = new_tv () in
+                St.return (return (`Eq (t2, `Int)) :: return (`Ind (t1, t)) :: c1 @ c2, t)
 
-            | E.Name x -> [], Context.find x ctx
-            | E.Int 0 -> [], new_tv ()
-            | E.Int _ -> [], `Int
-            | E.String _ -> [], `String
-            | E.Lambda (xs, b) ->
+            | E.Name x -> St.return ([], Context.find x ctx)
+            | E.Int 0 -> St.return ([], new_tv ())
+            | E.Int _ -> St.return ([], `Int)
+            | E.String _ -> St.return ([], `String)
+            | E.Lambda (xs, b) -> fun s ->
                 (* here we generate variables for parameters on special level `k` *)
 
                 current_level := !current_level + 1 ;
@@ -1387,12 +1430,12 @@ module Type = struct
                 current_level := !current_level + 1 ;
 
                 let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
-                let c, t = infer_t ctx' b in
+                let (c, t), s = infer_t ctx' b s in
 
                 let Simpl.{ s; r = c } =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx (level - 1) level in
-                    simplify#run @@ simplify#full c
+                    simplify#run s @@ simplify#full c
                 in
 
                 (* after that we have residual constraints and substitution
@@ -1409,7 +1452,7 @@ module Type = struct
                 let bc, Simpl.{ s; r = fc } =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx level level in
-                    simplify#run ~s @@ simplify#full_deterministic c
+                    simplify#run s @@ simplify#full_deterministic c
                 in
 
                 (* now we have two kinds of residual constraints:
@@ -1461,55 +1504,55 @@ module Type = struct
 
                 current_level := !current_level - 1 ;
 
-                fc, `Arrow (bvs, bc, ts, t)
+                (fc, `Arrow (bvs, bc, ts, t)), s
 
-            | E.Skip -> [], new_tv ()
+            | E.Skip -> St.return ([], new_tv ())
             | E.Array xs ->
-                let cts = List.map (infer_t ctx) xs in
+                let* cts = St.map_m (infer_t ctx) xs in
 
                 let t = new_tv () in
                 let c = List.concat_map (fun (c', s) -> return (`Eq (t, s)) :: c') cts in
 
-                c, `Array t
+                St.return (c, `Array t)
 
             | E.Sexp (x, xs) ->
-                let cts = List.map (infer_t ctx) xs in
+                let* cts = St.map_m (infer_t ctx) xs in
                 let c = List.concat_map fst cts in
 
                 let t = new_tv () in
-                return (`Sexp (x, t, List.map snd cts)) :: c, t
+                St.return (return (`Sexp (x, t, List.map snd cts)) :: c, t)
 
             | E.If (c, t, f) ->
-                let c1, _ = infer_t ctx c in
-                let c2, t = infer_t ctx t in
-                let c3, t' = infer_t ctx f in
-                return (`Eq (t, t')) :: c1 @ c2 @ c3, t
+                let* c1, _ = infer_t ctx c in
+                let* c2, t = infer_t ctx t in
+                let* c3, t' = infer_t ctx f in
+                St.return (return (`Eq (t, t')) :: c1 @ c2 @ c3, t)
 
             | E.While (c, b) ->
-                let c1, _ = infer_t ctx c in
-                let c2, _ = infer_t ctx b in
-                c1 @ c2, new_tv ()
+                let* c1, _ = infer_t ctx c in
+                let* c2, _ = infer_t ctx b in
+                St.return (c1 @ c2, new_tv ())
 
             | E.DoWhile (b, c) ->
-                let c1, _ = infer_t ctx b in
-                let c2, _ = infer_t ctx c in
-                c1 @ c2, new_tv ()
+                let* c1, _ = infer_t ctx b in
+                let* c2, _ = infer_t ctx c in
+                St.return (c1 @ c2, new_tv ())
 
             | E.Case (x, bs) ->
-                let c, t = infer_t ctx x in
+                let* c, t = infer_t ctx x in
                 let s = new_tv () in
 
                 let f (cs, ps) (p, b) =
                     let p, ctx = infer_p ctx p in
-                    let c', s' = infer_t ctx b in
-                    (return (`Eq (s, s')) :: c') :: cs, p::ps
+                    let* c', s' = infer_t ctx b in
+                    St.return ((return (`Eq (s, s')) :: c') :: cs, p::ps)
                 in
 
-                let cs, ps = List.fold_left f ([c], []) bs in
+                let* cs, ps = St.traverse f ([c], []) bs in
                 let c = List.concat @@ List.rev cs in
-                return (`Match (t, ps)) :: c, s
+                St.return (return (`Match (t, ps)) :: c, s)
 
-        and infer_decl ctx : E.decl -> _ = function
+        and infer_decl ctx : E.decl -> (c_aux list) St.t = function
         | E.Var v, inf ->
             let t' = Context.find inf.name ctx in
 
@@ -1518,19 +1561,21 @@ module Type = struct
             let old_decls = !current_decls in
             current_decls := [] ;
 
-            let c, t = infer_t ctx v in
+            let* c, t = infer_t ctx v in
 
             current_decls := (inf.name, t', !current_decls) :: old_decls ;
 
-            (`Eq (t', t), { path = !current_path ; pos = (snd v).pos; parents = [] }) :: c
+            let c' = `Eq (t', t), { path = !current_path ; pos = (snd v).pos; parents = [] } in
+            St.return @@ c' :: c
 
         | E.Fun (xs, b), inf -> infer_decl ctx (E.Var (E.Lambda (xs, b), snd b), inf)
 
-        and infer_decls ctx ds =
+        and infer_decls ctx ds : (c_aux list * t Context.t) St.t =
             let f ctx (_, inf : E.decl) = Context.add inf.name (new_tv ()) ctx in
             let ctx = List.fold_left f ctx ds in
 
-            List.concat_map (fun d -> infer_decl ctx d) ds, ctx
+            let* c = St.map_m (infer_decl ctx) ds in
+            St.return (List.concat c, ctx)
         in
 
         object
