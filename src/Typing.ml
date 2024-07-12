@@ -204,113 +204,6 @@ module Type = struct
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
 
-    (* logic type variables with no respect to substitution *)
-
-    let lvars p =
-        let rec ftv_t bvs fvs : t -> _ = function
-        | `GVar x ->
-            if not @@ IS.mem x bvs then failwith "lvars: free ground variable" ;
-            fvs
-
-        | `LVar (x, l) ->
-            if IS.mem x bvs then failwith "lvars: bound logic variable" ;
-            if p l then IS.add x fvs else fvs
-
-        | `Int -> fvs
-        | `String -> fvs
-        | `Array t -> ftv_t bvs fvs t
-        | `Sexp xs -> ftv_sexp bvs fvs xs
-
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            ftv_t bvs (List.fold_left (ftv_t bvs) (List.fold_left (ftv_c bvs) fvs c) ts) t
-
-        | `Mu (x, t) -> ftv_t (IS.add x bvs) fvs t
-
-        and ftv_sexp bvs fvs ((xs, _) : sexp) =
-            SexpConstructors.fold (fun _ ts fvs -> List.fold_left (ftv_t bvs) fvs ts) xs fvs
-
-        and ftv_p bvs fvs : p -> _ = function
-        | `Wildcard -> fvs
-        | `Typed (t, p) -> ftv_p bvs (ftv_t bvs fvs t) p
-        | `Array ps -> List.fold_left (ftv_p bvs) fvs ps
-        | `Sexp (_, ps) -> List.fold_left (ftv_p bvs) fvs ps
-        | `Boxed -> fvs
-        | `Unboxed -> fvs
-        | `StringTag -> fvs
-        | `ArrayTag -> fvs
-        | `SexpTag -> fvs
-        | `FunTag -> fvs
-
-        and ftv_c bvs fvs : c -> _ = function
-        | `Eq (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
-        | `Ind (l, r) -> ftv_t bvs (ftv_t bvs fvs l) r
-        | `Call (t, ts, t') -> ftv_t bvs (List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts) t'
-        | `Match (t, ps) -> List.fold_left (ftv_p bvs) (ftv_t bvs fvs t) ps
-        | `Sexp (_, t, ts) -> List.fold_left (ftv_t bvs) (ftv_t bvs fvs t) ts
-        in
-
-        object
-
-            method t = ftv_t
-            method sexp = ftv_sexp
-            method p = ftv_p
-            method c = ftv_c
-        end
-
-    (* convert logic variables to ground with no respect to substitution *)
-
-    let lvars_to_gvars p =
-        let rec ltog_t bvs : t -> t = function
-        | `GVar x as t ->
-            if not @@ IS.mem x bvs then failwith "lvars_to_gvars: free ground variable" ;
-            t
-
-        | `LVar (x, l) as t ->
-            if IS.mem x bvs then failwith "lvars_to_gvars: bound logic variable" ;
-            if p l then `GVar x else t
-
-        | `Int -> `Int
-        | `String -> `String
-        | `Array t -> `Array (ltog_t bvs t)
-        | `Sexp xs -> `Sexp (ltog_sexp bvs xs)
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            `Arrow (xs, List.map (ltog_c bvs) c, List.map (ltog_t bvs) ts, ltog_t bvs t)
-
-        | `Mu (x, t) -> `Mu (x, ltog_t (IS.add x bvs) t)
-
-        and ltog_sexp bvs ((xs, row) : sexp) : sexp =
-            SexpConstructors.map (List.map @@ ltog_t bvs) xs, row
-
-        and ltog_p bvs : p -> p = function
-        | `Wildcard -> `Wildcard
-        | `Typed (t, p) -> `Typed (ltog_t bvs t, ltog_p bvs p)
-        | `Array ps -> `Array (List.map (ltog_p bvs) ps)
-        | `Sexp (x, ps) -> `Sexp (x, List.map (ltog_p bvs) ps)
-        | `Boxed -> `Boxed
-        | `Unboxed -> `Unboxed
-        | `StringTag -> `StringTag
-        | `ArrayTag -> `ArrayTag
-        | `SexpTag -> `SexpTag
-        | `FunTag -> `FunTag
-
-        and ltog_c bvs : c -> c = function
-        | `Eq (t1, t2) -> `Eq (ltog_t bvs t1, ltog_t bvs t2)
-        | `Ind (t1, t2) -> `Ind (ltog_t bvs t1, ltog_t bvs t2)
-        | `Call (t, ts, t') -> `Call (ltog_t bvs t, List.map (ltog_t bvs) ts, ltog_t bvs t')
-        | `Match (t, ps) -> `Match (ltog_t bvs t, List.map (ltog_p bvs) ps)
-        | `Sexp (x, t, ts) -> `Sexp (x, ltog_t bvs t, List.map (ltog_t bvs) ts)
-        in
-
-        object
-
-            method t = ltog_t
-            method sexp = ltog_sexp
-            method p = ltog_p
-            method c = ltog_c
-        end
-
     (* refresh ground variables with logic with no respect to substitution *)
 
     let gvars_to_lvars level xs =
@@ -323,7 +216,7 @@ module Type = struct
                 t
             end
 
-        | `LVar (_, l) as t ->
+        | `LVar _ as t ->
             (* assume that there aren't any logic variables that could contain ground variables *)
             t
 
@@ -581,6 +474,147 @@ module Type = struct
             method sexp = lift_sexp
             method p = lift_p
             method c = lift_c
+        end
+
+    (* convert logic variables to ground with respect to substitution *)
+
+    let lvars_to_gvars var_gen level p =
+        let new_var () =
+            let idx = !var_gen + 1 in
+            var_gen := idx ;
+
+            idx
+        in
+
+        let cache = Stdlib.ref IM.empty in
+        let vars = Stdlib.ref IS.empty in
+
+        let map_m f s xs =
+            let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
+            let xs, s = List.fold_left f ([], s) xs in
+            List.rev xs, s
+        in
+
+        let map_m_sexp f s xs =
+            let f k x (xs, s) = let x, s = f s x in (SexpConstructors.add k x xs, s) in
+            SexpConstructors.fold f xs (SexpConstructors.empty, s)
+        in
+
+        let rec ltog_t bvs s : t -> t * Subst.t = function
+        | `GVar x as t ->
+            if not @@ IS.mem x bvs then failwith "lvars_to_gvars: free ground variable" ;
+            t, s
+
+        | `LVar (x, l) ->
+            if IS.mem x bvs then failwith "lvars_to_gvars: bound logic variable" ;
+
+            let x, l = Subst.find_var (x, l) s in
+
+            begin match Subst.find_type (x, l) s with
+            | None ->
+                if p l then begin
+                    vars := IS.add x !vars ;
+                    `GVar x, s
+                end else begin
+                    `LVar (x, l), s
+                end
+
+            | Some t ->
+                match IM.find_opt x !cache with
+                | Some x' -> `LVar (x', level), s
+                | None ->
+                    let x' = new_var () in
+                    cache := IM.add x x' !cache ;
+
+                    let t', s = ltog_t bvs s t in
+                    let s = Subst.bind_type (x', level) t' s in
+                    `LVar (x', level), s
+            end
+
+        | `Int -> `Int, s
+        | `String -> `String, s
+        | `Array t -> let t, s = ltog_t bvs s t in `Array t, s
+        | `Sexp xs -> let xs, s = ltog_sexp bvs s xs in `Sexp xs, s
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            let c, s = map_m (ltog_c bvs) s c in
+            let ts, s = map_m (ltog_t bvs) s ts in
+            let t, s = ltog_t bvs s t in
+            `Arrow (xs, c, ts, t), s
+
+        | `Mu (x, t) -> let t, s = ltog_t (IS.add x bvs) s t in `Mu (x, t), s
+
+        and ltog_sexp bvs s (xs, row : sexp) : sexp * Subst.t =
+            let xs, s = map_m_sexp (map_m @@ ltog_t bvs) s xs in
+
+            let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
+
+            match Option.bind row @@ Fun.flip Subst.find_sexp s with
+            | None -> (xs, row), s
+            | Some xs' ->
+                let row = Option.get row in
+                match IM.find_opt row !cache with
+                | Some row' -> (xs, Some row'), s
+                | None ->
+                    let row' = new_var () in
+                    cache := IM.add row row' !cache ;
+
+                    let xs', s = ltog_sexp bvs s xs' in
+                    let s = Subst.bind_sexp row' xs' s in
+                    (xs, Some row'), s
+
+        and ltog_p bvs s : p -> p * Subst.t = function
+        | `Wildcard -> `Wildcard, s
+        | `Typed (t, p) ->
+            let t, s = ltog_t bvs s t in
+            let p, s = ltog_p bvs s p in
+            `Typed (t, p), s
+
+        | `Array ps -> let ps, s = map_m (ltog_p bvs) s ps in `Array ps, s
+        | `Sexp (x, ps) -> let ps, s = map_m (ltog_p bvs) s ps in `Sexp (x, ps), s
+        | `Boxed -> `Boxed, s
+        | `Unboxed -> `Unboxed, s
+        | `StringTag -> `StringTag, s
+        | `ArrayTag -> `ArrayTag, s
+        | `SexpTag -> `SexpTag, s
+        | `FunTag -> `FunTag, s
+
+        and ltog_c bvs s : c -> c * Subst.t = function
+        | `Eq (t1, t2) ->
+            let t1, s = ltog_t bvs s t1 in
+            let t2, s = ltog_t bvs s t2 in
+            `Eq (t1, t2), s
+
+        | `Ind (t1, t2) ->
+            let t1, s = ltog_t bvs s t1 in
+            let t2, s = ltog_t bvs s t2 in
+            `Ind (t1, t2), s
+
+        | `Call (t, ts, t') ->
+            let t, s = ltog_t bvs s t in
+            let ts, s = map_m (ltog_t bvs) s ts in
+            let t', s = ltog_t bvs s t' in
+            `Call (t, ts, t'), s
+
+        | `Match (t, ps) ->
+            let t, s = ltog_t bvs s t in
+            let ps, s = map_m (ltog_p bvs) s ps in
+            `Match (t, ps), s
+
+        | `Sexp (x, t, ts) ->
+            let t, s = ltog_t bvs s t in
+            let ts, s = map_m (ltog_t bvs) s ts in
+            `Sexp (x, t, ts), s
+        in
+
+        object
+
+            method t = ltog_t
+            method sexp = ltog_sexp
+            method p = ltog_p
+            method c = ltog_c
+
+            method vars () = !vars
         end
 
     (* check has term recursion in substitution *)
@@ -1426,48 +1460,25 @@ module Type = struct
                  * "true" residual constraints are free since we unable to solve them on level `k`,
                  * other returned constraints are bound since we unable to solve them deterministically
                  *
-                 * we apply substitution and collect free variables on level `k` and `k + 1` as bound
+                 * to build result type, we need to convert bound variables to ground
                  *)
 
-                let ts, bc, t =
-                    let apply_subst = apply_subst s in
-                    let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
-                    let bc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) bc in
-                    let t = apply_subst#t IS.empty t in
-                    ts, bc, t
-                in
+                let ts = List.map snd xts in
 
-                let bvs =
+                let xs, bc, ts, t, s =
                     let level = !current_level in
-                    let lvars = lvars @@ fun l -> l >= level in
+                    let lvars_to_gvars = lvars_to_gvars prev_var_idx level @@ fun l -> l >= level in
 
-                    let lvars_c fvs (c, _) = lvars#c IS.empty fvs c in
-
-                    if not @@ IS.is_empty @@ List.fold_left lvars_c IS.empty fc then
-                        failwith "BUG: lowlevel variables in free constraints occurred" ;
-
-                    let fvs = IS.empty in
-                    let fvs = List.fold_left (lvars#t IS.empty) fvs ts in
-                    let fvs = List.fold_left lvars_c fvs bc in
-                    let fvs = lvars#t IS.empty fvs t in
-                    fvs
-                in
-
-                (* to build result type, we need to convert bound variables to ground *)
-
-                let bc, ts, t =
-                    let level = !current_level in
-                    let lvars_to_gvars = lvars_to_gvars @@ fun l -> l >= level in
-
-                    let ts = List.map (lvars_to_gvars#t IS.empty) ts in
-                    let bc = List.map (fun (c, _) -> lvars_to_gvars#c IS.empty c) bc in
-                    let t = lvars_to_gvars#t IS.empty t in
-                    bc, ts, t
+                    let ts, s = St.map_m (Fun.flip @@ lvars_to_gvars#t IS.empty) ts s in
+                    let bc, s = St.map_m (fun (c, _) s -> lvars_to_gvars#c IS.empty s c) bc s in
+                    let t, s = lvars_to_gvars#t IS.empty s t in
+                    let xs = lvars_to_gvars#vars () in
+                    xs, bc, ts, t, s
                 in
 
                 current_level := !current_level - 1 ;
 
-                (fc, `Arrow (bvs, bc, ts, t)), s
+                (fc, `Arrow (xs, bc, ts, t)), s
 
             | E.Skip -> St.return ([], new_tv ())
             | E.Array xs ->
