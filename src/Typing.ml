@@ -204,63 +204,6 @@ module Type = struct
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
 
-    (* refresh ground variables with logic with no respect to substitution *)
-
-    let gvars_to_lvars level xs =
-        let rec gtol_t bvs = function
-        | `GVar x as t ->
-            begin match IM.find_opt x xs with
-            | Some x -> `LVar (x, level)
-            | None ->
-                if not @@ IS.mem x bvs then failwith "gvars_to_lvars: free ground variable" ;
-                t
-            end
-
-        | `LVar _ as t ->
-            (* assume that there aren't any logic variables that could contain ground variables *)
-            t
-
-        | `Int -> `Int
-        | `String -> `String
-        | `Array t -> `Array (gtol_t bvs t)
-        | `Sexp xs -> `Sexp (gtol_sexp bvs xs)
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            `Arrow (xs, List.map (gtol_c bvs) c, List.map (gtol_t bvs) ts, gtol_t bvs t)
-
-        | `Mu (x, t) -> `Mu (x, gtol_t (IS.add x bvs) t)
-
-        and gtol_sexp bvs ((xs, row) : sexp) : sexp =
-            SexpConstructors.map (List.map @@ gtol_t bvs) xs, row
-
-        and gtol_p bvs : p -> p = function
-        | `Wildcard -> `Wildcard
-        | `Typed (t, p) -> `Typed (gtol_t bvs t, gtol_p bvs p)
-        | `Array ps -> `Array (List.map (gtol_p bvs) ps)
-        | `Sexp (x, ps) -> `Sexp (x, List.map (gtol_p bvs) ps)
-        | `Boxed -> `Boxed
-        | `Unboxed -> `Unboxed
-        | `StringTag -> `StringTag
-        | `ArrayTag -> `ArrayTag
-        | `SexpTag -> `SexpTag
-        | `FunTag -> `FunTag
-
-        and gtol_c bvs : c -> c = function
-        | `Eq (t1, t2) -> `Eq (gtol_t bvs t1, gtol_t bvs t2)
-        | `Ind (t1, t2) -> `Ind (gtol_t bvs t1, gtol_t bvs t2)
-        | `Call (t, ts, t') -> `Call (gtol_t bvs t, List.map (gtol_t bvs) ts, gtol_t bvs t')
-        | `Match (t, ps) -> `Match (gtol_t bvs t, List.map (gtol_p bvs) ps)
-        | `Sexp (x, t, ts) -> `Sexp (x, gtol_t bvs t, List.map (gtol_t bvs) ts)
-        in
-
-        object
-
-            method t = gtol_t
-            method sexp = gtol_sexp
-            method p = gtol_p
-            method c = gtol_c
-        end
-
     (* substitution *)
 
     module Subst = struct
@@ -476,7 +419,7 @@ module Type = struct
             method c = lift_c
         end
 
-    (* convert logic variables to ground with respect to substitution *)
+    (* convert logic variables to ground w.r.t. substitution *)
 
     let lvars_to_gvars var_gen level p =
         let new_var () =
@@ -615,6 +558,143 @@ module Type = struct
             method c = ltog_c
 
             method vars () = !vars
+        end
+
+    (* refresh ground variables with logic w.r.t. substitution *)
+
+    let gvars_to_lvars var_gen level xs =
+        let new_var () =
+            let idx = !var_gen + 1 in
+            var_gen := idx ;
+
+            idx
+        in
+
+        let cache = Stdlib.ref IM.empty in
+
+        let map_m f s xs =
+            let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
+            let xs, s = List.fold_left f ([], s) xs in
+            List.rev xs, s
+        in
+
+        let map_m_sexp f s xs =
+            let f k x (xs, s) = let x, s = f s x in (SexpConstructors.add k x xs, s) in
+            SexpConstructors.fold f xs (SexpConstructors.empty, s)
+        in
+
+        let rec gtol_t bvs s : t -> t * Subst.t = function
+        | `GVar x as t ->
+            if IS.mem x bvs then t, s else begin
+                match IM.find_opt x xs with
+                | Some x -> `LVar (x, level), s
+                | None -> failwith "gvars_to_lvars: free ground variable"
+            end
+
+        | `LVar (x, l) ->
+            if IS.mem x bvs then failwith "gvars_to_lvars: bound logic variable" ;
+
+            let x, l = Subst.find_var (x, l) s in
+
+            begin match Subst.find_type (x, l) s with
+            | None ->
+                (* assume that there aren't any logic variables that could contain ground variables *)
+                `LVar (x, l), s
+
+            | Some t ->
+                match IM.find_opt x !cache with
+                | Some x' -> `LVar (x', level), s
+                | None ->
+                    let x' = new_var () in
+                    cache := IM.add x x' !cache ;
+
+                    let t', s = gtol_t bvs s t in
+                    let s = Subst.bind_type (x', level) t' s in
+                    `LVar (x', level), s
+            end
+
+        | `Int -> `Int, s
+        | `String -> `String, s
+        | `Array t -> let t, s = gtol_t bvs s t in `Array t, s
+        | `Sexp xs -> let xs, s = gtol_sexp bvs s xs in `Sexp xs, s
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            let c, s = map_m (gtol_c bvs) s c in
+            let ts, s = map_m (gtol_t bvs) s ts in
+            let t, s = gtol_t bvs s t in
+            `Arrow (xs, c, ts, t), s
+
+        | `Mu (x, t) -> let t, s = gtol_t (IS.add x bvs) s t in `Mu (x, t), s
+
+        and gtol_sexp bvs s (xs, row : sexp) : sexp * Subst.t =
+            let xs, s = map_m_sexp (map_m @@ gtol_t bvs) s xs in
+
+            let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
+
+            match Option.bind row @@ Fun.flip Subst.find_sexp s with
+            | None -> (xs, row), s
+            | Some xs' ->
+                let row = Option.get row in
+                match IM.find_opt row !cache with
+                | Some row' -> (xs, Some row'), s
+                | None ->
+                    let row' = new_var () in
+                    cache := IM.add row row' !cache ;
+
+                    let xs', s = gtol_sexp bvs s xs' in
+                    let s = Subst.bind_sexp row' xs' s in
+                    (xs, Some row'), s
+
+        and gtol_p bvs s : p -> p * Subst.t = function
+        | `Wildcard -> `Wildcard, s
+        | `Typed (t, p) ->
+            let t, s = gtol_t bvs s t in
+            let p, s = gtol_p bvs s p in
+            `Typed (t, p), s
+
+        | `Array ps -> let ps, s = map_m (gtol_p bvs) s ps in `Array ps, s
+        | `Sexp (x, ps) -> let ps, s = map_m (gtol_p bvs) s ps in `Sexp (x, ps), s
+        | `Boxed -> `Boxed, s
+        | `Unboxed -> `Unboxed, s
+        | `StringTag -> `StringTag, s
+        | `ArrayTag -> `ArrayTag, s
+        | `SexpTag -> `SexpTag, s
+        | `FunTag -> `FunTag, s
+
+        and gtol_c bvs s : c -> c * Subst.t = function
+        | `Eq (t1, t2) ->
+            let t1, s = gtol_t bvs s t1 in
+            let t2, s = gtol_t bvs s t2 in
+            `Eq (t1, t2), s
+
+        | `Ind (t1, t2) ->
+            let t1, s = gtol_t bvs s t1 in
+            let t2, s = gtol_t bvs s t2 in
+            `Ind (t1, t2), s
+
+        | `Call (t, ts, t') ->
+            let t, s = gtol_t bvs s t in
+            let ts, s = map_m (gtol_t bvs) s ts in
+            let t', s = gtol_t bvs s t' in
+            `Call (t, ts, t'), s
+
+        | `Match (t, ps) ->
+            let t, s = gtol_t bvs s t in
+            let ps, s = map_m (gtol_p bvs) s ps in
+            `Match (t, ps), s
+
+        | `Sexp (x, t, ts) ->
+            let t, s = gtol_t bvs s t in
+            let ts, s = map_m (gtol_t bvs) s ts in
+            `Sexp (x, t, ts), s
+        in
+
+        object
+
+            method t = gtol_t
+            method sexp = gtol_sexp
+            method p = gtol_p
+            method c = gtol_c
         end
 
     (* check has term recursion in substitution *)
@@ -1057,8 +1137,7 @@ module Type = struct
                 end
 
             | `Call (ft, ts, t) ->
-                (* since we need full substitution application in most cases, do it at start *)
-                begin match (apply_subst st.s)#t IS.empty ft with
+                begin match shaps st.s ft with
                 | `LVar (_, l) ->
                     (* here we utilize the fact that there is special level for parameters
                      * and force Call-s to stay under forall binder to prevent lifting
@@ -1078,26 +1157,35 @@ module Type = struct
                             raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
                     end ;
 
-                    let fc, fts, ft =
+                    let fc, fts, ft, s =
                         (* special case when no bound variables in function type
                          *
                          * in this case we have no need to refresh variables
                          * and able to allow logic variables in type
                          *)
 
-                        if IS.is_empty xs then fc, fts, ft else begin
+                        if IS.is_empty xs then fc, fts, ft, st.s else begin
+                            let map_m f s xs =
+                                let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
+                                let xs, s = List.fold_left f ([], s) xs in
+                                List.rev xs, s
+                            in
+
                             let gtol =
                                 let f x = x, new_var () in
                                 let xs = IM.of_seq @@ Seq.map f @@ IS.to_seq xs in
-                                gvars_to_lvars level xs
+                                gvars_to_lvars var_gen level xs
                             in
 
-                            let fc = List.map (gtol#c IS.empty) fc in
-                            let fts = List.map (gtol#t IS.empty) fts in
-                            let ft = gtol#t IS.empty ft in
-                            fc, fts, ft
+                            let s = st.s in
+                            let fc, s = map_m (gtol#c IS.empty) s fc in
+                            let fts, s = map_m (gtol#t IS.empty) s fts in
+                            let ft, s = gtol#t IS.empty s ft in
+                            fc, fts, ft, s
                         end
                     in
+
+                    let st = { st with s } in
 
                     let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
                     let c = `Eq (ft, t) :: c in
