@@ -268,6 +268,9 @@ let[@ocaml.warning "-32"] main =
 
                 if c <> [] then failwith "BUG: simplify on level 0 returned residuals" ;
 
+                print_endline "Result substitution:" ;
+                T.Type.Subst.debug_print s ;
+
                 let finish_types =
                     let monomorphize = (T.Type.monomorphize `Int)#t T.Type.IS.empty in
                     let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in

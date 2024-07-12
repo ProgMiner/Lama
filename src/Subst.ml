@@ -2,6 +2,8 @@
 module type Term = sig
 
     type t
+
+    val show : t -> string
 end
 
 module Make(T : Term) : sig
@@ -19,6 +21,8 @@ module Make(T : Term) : sig
 
     val bind_vars: v -> v -> t -> t
     val bind_term: v -> T.t -> t -> t
+
+    val debug_print: t -> unit
 
 end = struct
 
@@ -102,4 +106,43 @@ end = struct
         end ;
 
         { nodes = IntMap.add v { v_node with term = Some t } s.nodes }
+
+    let debug_print s =
+        let module VS = Set.Make(struct
+
+            type t = int * int
+
+            let compare (x, l) (y, k) =
+                if l <> k
+                then Int.compare l k
+                else Int.compare x y
+        end) in
+
+        let vars = Hashtbl.create @@ IntMap.cardinal s.nodes in
+
+        let f x node =
+            let x', _ = find_internal x s in
+            let xs = Option.value ~default:VS.empty @@ Hashtbl.find_opt vars x' in
+            Hashtbl.replace vars x' @@ VS.add (x, node.level) xs
+        in
+
+        IntMap.iter f s.nodes ;
+
+        let f x xs =
+            let node = IntMap.find x s.nodes in
+
+            let f (x, l) = Printf.sprintf "(%d, %d)" x l in
+            let xs = List.of_seq @@ Seq.map f @@ VS.to_seq xs in
+            let xs = String.concat ", " xs in
+
+            let l = node.level in
+            let t = match node.term with
+            | Some t -> T.show t
+            | None -> ""
+            in
+
+            Printf.printf "{%s} subsumed by (%d, %d) |-> %s\n" xs x l t
+        in
+
+        Hashtbl.iter f vars
 end

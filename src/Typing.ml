@@ -212,7 +212,14 @@ module Type = struct
         = Type of t
         | Sexp of sexp
 
-        include Subst.Make(struct type t = value end)
+        include Subst.Make(struct
+
+            type t = value
+
+            let show = function
+            | Type t -> show_t t
+            | Sexp xs -> show_sexp xs
+        end)
 
         let unpack_type = function
         | Type t -> t
@@ -281,16 +288,18 @@ module Type = struct
         | `Mu (x, t) -> `Mu (x, subst_t (IS.add x bvs) t)
 
         and subst_sexp bvs (xs, row) =
-            let xs = SexpConstructors.map (List.map @@ subst_t bvs) xs in
-
             let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
 
             match Option.bind row @@ Fun.flip Subst.find_sexp s with
-            | None -> xs, row
+            | None ->
+                let xs = SexpConstructors.map (List.map @@ subst_t bvs) xs in
+                xs, row
+
             | Some (xs', row') ->
                 let f _ _ _ = failwith "apply_subst: intersecting constructors in S-exp" in
                 let xs = SexpConstructors.union f xs xs' in
 
+                (* tail recursion intended *)
                 subst_sexp bvs (xs, row')
 
         and subst_p bvs : p -> p = function
