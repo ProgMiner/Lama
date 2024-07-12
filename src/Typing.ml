@@ -1024,34 +1024,8 @@ module Type = struct
 
             | `Call (ft, ts, t) ->
                 (* since we need full substitution application in most cases, do it at start *)
-                let ft' = (apply_subst st.s)#t IS.empty ft in
-
-                (* if we have highlevel variables, we unable to refresh type on current level *)
-                let ft_has_highlevel_lvars =
-                    let lvars = (lvars @@ fun l -> l < level)#t IS.empty IS.empty ft' in
-                    not @@ IS.is_empty lvars
-                in
-
-                (* if we have lowlevel variables, we unable to refresh type now *)
-                let ft_has_lowlevel_lvars =
-                    let lvars = (lvars @@ fun l -> l >= level)#t IS.empty IS.empty ft' in
-                    not @@ IS.is_empty lvars
-                in
-
-                (* if we haven't bound variables, we haven't need to refreshing type *)
-                let ft_has_bound_vars =
-                    let rec f = function
-                    | `LVar _ -> true (* may have bound variables *)
-                    | `Arrow (xs, _, _, _) -> not @@ IS.is_empty xs
-                    | `Mu (_, t) -> f t
-                    | _ -> false
-                    in
-
-                    f ft'
-                in
-
-                begin match ft' with
-                | _ when ft_has_highlevel_lvars && ft_has_bound_vars ->
+                begin match (apply_subst st.s)#t IS.empty ft with
+                | `LVar (_, l) ->
                     (* here we utilize the fact that there is special level for parameters
                      * and force Call-s to stay under forall binder to prevent lifting
                      * of argument types
@@ -1060,16 +1034,14 @@ module Type = struct
                      * if argument types lifted too much, they will be monomorphized any way...
                      *)
 
-                    handle_lvar st params_level c_aux
-
-                | _ when ft_has_lowlevel_lvars && ft_has_bound_vars -> None
+                    handle_lvar st (Int.max l params_level) c_aux
 
                 (* TODO: think about recursive Call-s... *)
                 | `Arrow (xs, fc, fts, ft) ->
                     begin
                         let args_num = List.length ts in
                         if args_num <> List.length fts then
-                            raise @@ Failure (WrongArgsNum (ft', args_num), c_aux, st.s)
+                            raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
                     end ;
 
                     let fc, fts, ft =
@@ -1085,11 +1057,6 @@ module Type = struct
                                 let xs = IM.of_seq @@ Seq.map f @@ IS.to_seq xs in
                                 gvars_to_lvars level xs
                             in
-
-                            (*
-                            Printf.printf "ARROW TYPE: %s\n" @@ show_t
-                                @@ `Arrow (xs, fc, fts, ft) ;
-                            *)
 
                             let fc = List.map (gtol#c IS.empty) fc in
                             let fts = List.map (gtol#t IS.empty) fts in
@@ -1462,11 +1429,13 @@ module Type = struct
                  * we apply substitution and collect free variables on level `k` and `k + 1` as bound
                  *)
 
-                let apply_subst = apply_subst s in
-                let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
-                let fc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) fc in
-                let bc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) bc in
-                let t = apply_subst#t IS.empty t in
+                let ts, bc, t =
+                    let apply_subst = apply_subst s in
+                    let ts = List.map (fun (_, t) -> apply_subst#t IS.empty t) xts in
+                    let bc = List.map (fun (c, inf) -> apply_subst#c IS.empty c, inf) bc in
+                    let t = apply_subst#t IS.empty t in
+                    ts, bc, t
+                in
 
                 let bvs =
                     let level = !current_level in
@@ -1495,12 +1464,6 @@ module Type = struct
                     let t = lvars_to_gvars#t IS.empty t in
                     bc, ts, t
                 in
-
-                (* since we discard substitution, apply it on debug info *)
-                begin
-                    let rec f (x, t, inner) = x, apply_subst#t IS.empty t, List.map f inner in
-                    current_decls := List.map f !current_decls
-                end ;
 
                 current_level := !current_level - 1 ;
 
