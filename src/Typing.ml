@@ -1141,7 +1141,22 @@ module Type = struct
                 | `LVar (_, l) -> handle_lvar st l c_aux
                 | `String -> Some ([`Eq (t2, `Int)], st)
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
-                | `Sexp _ -> raise @@ Failure (NotSupported, c_aux, st.s)
+                | `Sexp (xs, row) ->
+                    let xs = SexpConstructors.to_seq xs in
+                    let xs = Seq.concat_map (fun (_, ts) -> List.to_seq ts) xs in
+                    let xs = List.of_seq @@ Seq.map (fun t -> `Eq (t, t2)) xs in
+
+                    let c = match row with
+                    | None -> xs
+                    | Some row -> `Ind (`Sexp (SexpConstructors.empty, Some row), t2) :: xs
+                    in
+
+                    (* if we have no ideas how to progress on this constraint, return None *)
+                    begin match c with
+                    | [`Ind _] -> None
+                    | _ -> Some (c, st)
+                    end
+
                 | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
                 end
 
@@ -1269,6 +1284,10 @@ module Type = struct
                         ; [t1, `Array t2]
                         ; [t1, `Sexp (SexpConstructors.empty, Some row)]
                         ]
+
+                | `Sexp (xs, Some _) when SexpConstructors.is_empty xs && greedy > 2 ->
+                    (* greedy assumption that there are no more constructors *)
+                    gen [[t1, `Sexp (SexpConstructors.empty, None)]]
 
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
