@@ -940,8 +940,14 @@ module Type = struct
                     raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
                 end
 
-        | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) -> failwith "TODO: unify arrows"
-        | `Mu (x1, t1), `Mu (x2, t2) -> failwith "TODO: unify recursive types"
+        | `Arrow (_, _, _, _) as t1, (`Arrow (_, _, _, _) as t2) ->
+            if t1 = t2 then Fun.id else failwith
+                @@ Printf.sprintf "TODO: unify arrows: [%s] [%s]" (show_t t1) (show_t t2)
+
+        | `Mu (_, _) as t1, (`Mu (_, _) as t2) ->
+            if t1 = t2 then Fun.id else failwith
+                @@ Printf.sprintf "TODO: unify recursive types: [%s] [%s]" (show_t t1) (show_t t2)
+
         | t1, t2 -> fun s -> raise @@ Unification_failure (s, t1, t2)
 
         and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
@@ -1488,7 +1494,12 @@ module Type = struct
             if cs = [] then st else let cs, c = one_step_nondet cs st in full' (st.s, c) [] cs
 
         and full' (s, c as inf) errs = function
-        | [] -> raise @@ Failure (Nested errs, c, s)
+        | [] ->
+            begin match errs with
+            | [err] -> raise @@ Failure err
+            | _ -> raise @@ Failure (Nested errs, c, s)
+            end
+
         | (cs, st) :: xs ->
             try full cs st
             with Failure err -> full' inf (err :: errs) xs
@@ -1542,6 +1553,7 @@ module Type = struct
             let ps, ctx = infer_ps ctx ps in
             `Sexp (x, ps), ctx
 
+        | Pattern.Const 0 -> `Wildcard, ctx
         | Pattern.Const _ -> `Unboxed, ctx
         | Pattern.String _ -> `StringTag, ctx
         | Pattern.Boxed -> `Boxed, ctx
@@ -1651,6 +1663,9 @@ module Type = struct
 
                 let xts = List.map (fun x -> x, new_tv ()) xs in
 
+                (* fictive variable on high level to prevent overmonomorphization *)
+                let t = new_tv () in
+
                 (* next we infer_t type of body on lower level (`k + 1`)
                  * and simplify them on this level
                  *)
@@ -1658,7 +1673,8 @@ module Type = struct
                 current_level := !current_level + 1 ;
 
                 let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
-                let (c, t), s = infer_t ctx' b s in
+                let (c, t'), s = infer_t ctx' b s in
+                let c = return (`Eq (t, t')) :: c in
 
                 let Simpl.{ s ; r = c } =
                     let level = !current_level in

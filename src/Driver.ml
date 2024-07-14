@@ -208,7 +208,7 @@ let[@ocaml.warning "-32"] main =
 
             let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
                 [ "read", `Arrow (T.Type.IS.empty, [], [], `Int)
-                ; "write", `Arrow (T.Type.IS.empty, [], [`Int], `Int)
+                ; "write", `Arrow (T.Type.IS.of_seq @@ List.to_seq [1], [], [`Int], `GVar 1)
                 ; "length", `Arrow
                     ( T.Type.IS.of_seq @@ List.to_seq [1]
                     , [`Match (`GVar 1, [`Boxed])]
@@ -253,6 +253,9 @@ let[@ocaml.warning "-32"] main =
 
                 print_endline "Inferred types:" ;
                 print_decls decls ;
+
+                print_endline "Source substitution:" ;
+                T.Type.Subst.debug_print s ;
 
                 let simplify = infer#simplify 0 in
                 let T.Type.Simpl.{ s; r = c } = simplify#run s @@ simplify#full c in
