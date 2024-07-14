@@ -91,7 +91,7 @@ module Expr = struct
 
         match d with
         | `Fun      (xs,  t) -> Fun (xs, from_language name t), inf
-        | `Variable  None    -> Var (Int 0, { name; pos = { row = 0 ; col = 0 } }), inf
+        | `Variable  None    -> Var (Int 0, { name ; pos = { row = 0 ; col = 0 } }), inf
         | `Variable (Some t) -> Var (from_language name t), inf
 end
 
@@ -229,15 +229,17 @@ module Type = struct
         | Sexp t -> t
         | _ -> failwith "unpack_sexp: not a row variable"
 
-        let find_row_var row s = fst @@ find_var (row, 0) s
+        let row_level = -1
+
+        let find_row_var row s = fst @@ find_var (row, row_level) s
 
         let find_type x s = Option.map unpack_type @@ find_term x s
-        let find_sexp x s = Option.map unpack_sexp @@ find_term (x, 0) s
+        let find_sexp x s = Option.map unpack_sexp @@ find_term (x, row_level) s
 
-        let bind_row_vars row1 row2 s = bind_vars (row1, 0) (row2, 0) s
+        let bind_row_vars row1 row2 s = bind_vars (row1, row_level) (row2, row_level) s
 
         let bind_type v t = bind_term v @@ Type t
-        let bind_sexp v t = bind_term (v, 0) @@ Sexp t
+        let bind_sexp v t = bind_term (v, row_level) @@ Sexp t
     end
 
     let apply_subst s =
@@ -571,7 +573,7 @@ module Type = struct
 
     (* refresh ground variables with logic w.r.t. substitution *)
 
-    let gvars_to_lvars var_gen level xs =
+    let gvars_to_lvars var_gen level s xs =
         let new_var () =
             let idx = !var_gen + 1 in
             var_gen := idx ;
@@ -579,24 +581,56 @@ module Type = struct
             idx
         in
 
-        let cache = Stdlib.ref IM.empty in
+        let cache = Hashtbl.create 0 in
 
-        let map_m f s xs =
-            let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
-            let xs, s = List.fold_left f ([], s) xs in
-            List.rev xs, s
+        (* counter for number of refreshed variables *)
+        let counter = Stdlib.ref 0 in
+
+        let open struct
+
+            type node_info = {
+
+                mutable old_level: int option;
+
+                mutable deps: IS.t;
+                mutable changed: bool;
+
+                mutable new_var: int option;
+                mutable new_level: int option;
+                mutable new_term: Subst.value option;
+            }
+        end in
+
+        (* inverted dependency graph *)
+        let inv_deps = Hashtbl.create 0 in
+        let cur_deps = Stdlib.ref IS.empty in
+
+        let get_deps_node x = match Hashtbl.find_opt inv_deps x with
+        | Some node -> node
+        | None ->
+            let node = {
+                old_level = None ;
+                deps = IS.empty ;
+                changed = false ;
+                new_var = None ;
+                new_level = None ;
+                new_term = None ;
+            } in
+
+            Hashtbl.add inv_deps x node ;
+            node
         in
 
-        let map_m_sexp f s xs =
-            let f k x (xs, s) = let x, s = f s x in (SexpConstructors.add k x xs, s) in
-            SexpConstructors.fold f xs (SexpConstructors.empty, s)
+        let record_dep x y =
+            let node = get_deps_node y in
+            node.deps <- IS.add x node.deps
         in
 
-        let rec gtol_t bvs s : t -> t * Subst.t = function
+        let rec gtol_t bvs : t -> t = function
         | `GVar x as t ->
-            if IS.mem x bvs then t, s else begin
+            if IS.mem x bvs then t else begin
                 match IM.find_opt x xs with
-                | Some x -> `LVar (x, level), s
+                | Some x -> counter := !counter + 1 ; `LVar (x, level)
                 | None -> failwith "gvars_to_lvars: free ground variable"
             end
 
@@ -608,102 +642,154 @@ module Type = struct
             begin match Subst.find_type (x, l) s with
             | None ->
                 (* assume that there aren't any logic variables that could contain ground variables *)
-                `LVar (x, l), s
+                `LVar (x, l)
 
             | Some t ->
-                match IM.find_opt x !cache with
-                | Some x' -> `LVar (x', level), s
+                (* current term depends on variable `x` *)
+                cur_deps := IS.add x !cur_deps ;
+
+                match Option.bind (Hashtbl.find_opt cache bvs) @@ IM.find_opt x with
+                | Some x' -> `LVar (x', level)
                 | None ->
                     let x' = new_var () in
-                    cache := IM.add x x' !cache ;
+                    Hashtbl.replace cache bvs @@ IM.add x x'
+                        @@ Option.value ~default:IM.empty
+                        @@ Hashtbl.find_opt cache bvs ;
 
-                    let t', s = gtol_t bvs s t in
-                    let s = Subst.bind_type (x', level) t' s in
-                    `LVar (x', level), s
+                    let old_deps = !cur_deps in
+                    cur_deps := IS.empty ;
+
+                    let old_counter = !counter in
+                    let t' = gtol_t bvs t in
+
+                    begin
+                        let node = get_deps_node x in
+
+                        node.old_level <- Some l ;
+                        node.changed <- !counter <> old_counter ;
+
+                        node.new_var <- Some x' ;
+                        node.new_level <- Some level ;
+                        node.new_term <- Some (Subst.Type t') ;
+                    end ;
+
+                    IS.iter (record_dep x) !cur_deps ;
+                    cur_deps := old_deps ;
+
+                    `LVar (x', level)
             end
 
-        | `Int -> `Int, s
-        | `String -> `String, s
-        | `Array t -> let t, s = gtol_t bvs s t in `Array t, s
-        | `Sexp xs -> let xs, s = gtol_sexp bvs s xs in `Sexp xs, s
+        | `Int -> `Int
+        | `String -> `String
+        | `Array t -> `Array (gtol_t bvs t)
+        | `Sexp xs -> `Sexp (gtol_sexp bvs xs)
         | `Arrow (xs, c, ts, t) ->
             let bvs = IS.union bvs xs in
-            let c, s = map_m (gtol_c bvs) s c in
-            let ts, s = map_m (gtol_t bvs) s ts in
-            let t, s = gtol_t bvs s t in
-            `Arrow (xs, c, ts, t), s
+            `Arrow (xs, List.map (gtol_c bvs) c, List.map (gtol_t bvs) ts, gtol_t bvs t)
 
-        | `Mu (x, t) -> let t, s = gtol_t (IS.add x bvs) s t in `Mu (x, t), s
+        | `Mu (x, t) -> `Mu (x, gtol_t (IS.add x bvs) t)
 
-        and gtol_sexp bvs s (xs, row : sexp) : sexp * Subst.t =
-            let xs, s = map_m_sexp (map_m @@ gtol_t bvs) s xs in
+        and gtol_sexp bvs (xs, row : sexp) : sexp =
+            let xs = SexpConstructors.map (List.map @@ gtol_t bvs) xs in
 
             let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
 
             match Option.bind row @@ Fun.flip Subst.find_sexp s with
-            | None -> (xs, row), s
+            | None -> xs, row
             | Some xs' ->
                 let row = Option.get row in
-                match IM.find_opt row !cache with
-                | Some row' -> (xs, Some row'), s
+
+                (* current term depends on variable `row` *)
+                cur_deps := IS.add row !cur_deps ;
+
+                match Option.bind (Hashtbl.find_opt cache bvs) @@ IM.find_opt row with
+                | Some row' -> xs, Some row'
                 | None ->
                     let row' = new_var () in
-                    cache := IM.add row row' !cache ;
+                    Hashtbl.replace cache bvs @@ IM.add row row'
+                        @@ Option.value ~default:IM.empty
+                        @@ Hashtbl.find_opt cache bvs ;
 
-                    let xs', s = gtol_sexp bvs s xs' in
-                    let s = Subst.bind_sexp row' xs' s in
-                    (xs, Some row'), s
+                    let old_deps = !cur_deps in
+                    cur_deps := IS.empty ;
 
-        and gtol_p bvs s : p -> p * Subst.t = function
-        | `Wildcard -> `Wildcard, s
-        | `Typed (t, p) ->
-            let t, s = gtol_t bvs s t in
-            let p, s = gtol_p bvs s p in
-            `Typed (t, p), s
+                    let old_counter = !counter in
+                    let xs' = gtol_sexp bvs xs' in
 
-        | `Array ps -> let ps, s = map_m (gtol_p bvs) s ps in `Array ps, s
-        | `Sexp (x, ps) -> let ps, s = map_m (gtol_p bvs) s ps in `Sexp (x, ps), s
-        | `Boxed -> `Boxed, s
-        | `Unboxed -> `Unboxed, s
-        | `StringTag -> `StringTag, s
-        | `ArrayTag -> `ArrayTag, s
-        | `SexpTag -> `SexpTag, s
-        | `FunTag -> `FunTag, s
+                    begin
+                        let node = get_deps_node row in
 
-        and gtol_c bvs s : c -> c * Subst.t = function
-        | `Eq (t1, t2) ->
-            let t1, s = gtol_t bvs s t1 in
-            let t2, s = gtol_t bvs s t2 in
-            `Eq (t1, t2), s
+                        node.old_level <- Some Subst.row_level ;
+                        node.changed <- !counter <> old_counter ;
 
-        | `Ind (t1, t2) ->
-            let t1, s = gtol_t bvs s t1 in
-            let t2, s = gtol_t bvs s t2 in
-            `Ind (t1, t2), s
+                        node.new_var <- Some row' ;
+                        node.new_level <- Some Subst.row_level ;
+                        node.new_term <- Some (Subst.Sexp xs') ;
+                    end ;
 
-        | `Call (t, ts, t') ->
-            let t, s = gtol_t bvs s t in
-            let ts, s = map_m (gtol_t bvs) s ts in
-            let t', s = gtol_t bvs s t' in
-            `Call (t, ts, t'), s
+                    IS.iter (record_dep row) !cur_deps ;
+                    cur_deps := old_deps ;
 
-        | `Match (t, ps) ->
-            let t, s = gtol_t bvs s t in
-            let ps, s = map_m (gtol_p bvs) s ps in
-            `Match (t, ps), s
+                    xs, Some row'
 
-        | `Sexp (x, t, ts) ->
-            let t, s = gtol_t bvs s t in
-            let ts, s = map_m (gtol_t bvs) s ts in
-            `Sexp (x, t, ts), s
+        and gtol_p bvs : p -> p = function
+        | `Wildcard -> `Wildcard
+        | `Typed (t, p) -> `Typed (gtol_t bvs t, gtol_p bvs p)
+        | `Array ps -> `Array (List.map (gtol_p bvs) ps)
+        | `Sexp (x, ps) -> `Sexp (x, List.map (gtol_p bvs) ps)
+        | `Boxed -> `Boxed
+        | `Unboxed -> `Unboxed
+        | `StringTag -> `StringTag
+        | `ArrayTag -> `ArrayTag
+        | `SexpTag -> `SexpTag
+        | `FunTag -> `FunTag
+
+        and gtol_c bvs : c -> c = function
+        | `Eq (t1, t2) -> `Eq (gtol_t bvs t1, gtol_t bvs t2)
+        | `Ind (t1, t2) -> `Ind (gtol_t bvs t1, gtol_t bvs t2)
+        | `Call (t, ts, t') -> `Call (gtol_t bvs t, List.map (gtol_t bvs) ts, gtol_t bvs t')
+        | `Match (t, ps) -> `Match (gtol_t bvs t, List.map (gtol_p bvs) ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, gtol_t bvs t, List.map (gtol_t bvs) ts)
+        in
+
+        let finalize () =
+            let rec propagate node =
+                if node.changed then begin
+                    let f y =
+                        let node = Hashtbl.find inv_deps y in
+
+                        if not node.changed then begin
+                            node.changed <- true ;
+                            propagate node
+                        end
+                    in
+
+                    IS.iter f node.deps
+                end
+            in
+
+            (* propagate `changed` flag *)
+            Hashtbl.iter (fun _ -> propagate) inv_deps ;
+
+            let add_bindings x node =
+                let new_var = Option.get node.new_var, Option.get node.new_level in
+
+                if node.changed
+                then Subst.bind_term new_var (Option.get node.new_term)
+                else Subst.bind_vars new_var (x, Option.get node.old_level)
+            in
+
+            Hashtbl.fold add_bindings inv_deps s
         in
 
         object
 
-            method t = gtol_t
-            method sexp = gtol_sexp
-            method p = gtol_p
-            method c = gtol_c
+            method t bvs t = cur_deps := IS.empty ; gtol_t bvs t
+            method sexp bvs xs = cur_deps := IS.empty ; gtol_sexp bvs xs
+            method p bvs p = cur_deps := IS.empty ; gtol_p bvs p
+            method c bvs c = cur_deps := IS.empty ; gtol_c bvs c
+
+            method finalize = finalize
         end
 
     (* check has term recursion in substitution *)
@@ -1117,13 +1203,24 @@ module Type = struct
             eqs @ ps, st
         in
 
-        let single_step_det st (c, _ as c_aux : c_aux) : (c list * st) option =
-            let handle_lvar st l (c, inf : c_aux) =
+        let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
+            let handle_lvar l =
                 if l < level then
                     let s = (lift_lvars var_gen l)#c IS.empty c st.s in
                     Some ([], { s ; r = (c, inf) :: st.r })
 
                 else None
+            in
+
+            (* TODO: infer from context (residuals) *)
+
+            let find_rec_call ft =
+                let f = function
+                | `Call (ft', _, _) -> shaps st.s ft' = ft
+                | _ -> false
+                in
+
+                List.find_opt f inf.parents
             in
 
             match c with
@@ -1138,7 +1235,7 @@ module Type = struct
 
             | `Ind (t1, t2) ->
                 begin match shaps st.s t1 with
-                | `LVar (_, l) -> handle_lvar st l c_aux
+                | `LVar (_, l) -> handle_lvar l
                 | `String -> Some ([`Eq (t2, `Int)], st)
                 | `Array t1 -> Some ([`Eq (t1, t2)], st)
                 | `Sexp (xs, row) ->
@@ -1151,7 +1248,7 @@ module Type = struct
                     | Some row -> `Ind (`Sexp (SexpConstructors.empty, Some row), t2) :: xs
                     in
 
-                    (* if we have no ideas how to progress on this constraint, return None *)
+                    (* if we have no ideas, how to progress on this constraint, return None *)
                     begin match c with
                     | [`Ind _] -> None
                     | _ -> Some (c, st)
@@ -1171,42 +1268,46 @@ module Type = struct
                      * if argument types lifted too much, they will be monomorphized any way...
                      *)
 
-                    handle_lvar st (Int.max l params_level) c_aux
+                    handle_lvar @@ Int.max l params_level
 
-                (* TODO: think about recursive Call-s... *)
-                | `Arrow (xs, fc, fts, ft) ->
+                | `Arrow (xs, fc, fts, ft) as ft' ->
                     begin
                         let args_num = List.length ts in
                         if args_num <> List.length fts then
-                            raise @@ Failure (WrongArgsNum (ft, args_num), c_aux, st.s)
+                            raise @@ Failure (WrongArgsNum (ft', args_num), c_aux, st.s)
                     end ;
 
                     let fc, fts, ft, s =
-                        (* special case when no bound variables in function type
-                         *
-                         * in this case we have no need to refresh variables
-                         * and able to allow logic variables in type
-                         *)
+                        match find_rec_call ft' with
+                        | None ->
+                            (* special case when no bound variables in function type
+                             *
+                             * in this case we have no need to refresh variables
+                             * and able to allow logic variables in type
+                             *)
 
-                        if IS.is_empty xs then fc, fts, ft, st.s else begin
-                            let map_m f s xs =
-                                let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
-                                let xs, s = List.fold_left f ([], s) xs in
-                                List.rev xs, s
-                            in
+                            if IS.is_empty xs then fc, fts, ft, st.s else begin
 
-                            let gtol =
                                 let f x = x, new_var () in
                                 let xs = IM.of_seq @@ Seq.map f @@ IS.to_seq xs in
-                                gvars_to_lvars var_gen level xs
-                            in
 
-                            let s = st.s in
-                            let fc, s = map_m (gtol#c IS.empty) s fc in
-                            let fts, s = map_m (gtol#t IS.empty) s fts in
-                            let ft, s = gtol#t IS.empty s ft in
-                            fc, fts, ft, s
-                        end
+                                let gtol = gvars_to_lvars var_gen level st.s xs in
+                                let fc = List.map (gtol#c IS.empty) fc in
+                                let fts = List.map (gtol#t IS.empty) fts in
+                                let ft = gtol#t IS.empty ft in
+                                let s = gtol#finalize () in
+
+                                fc, fts, ft, s
+                            end
+
+                        (* if we found that current Call produced by Call on the same type,
+                         * we just require that current call signature is same with previous
+                         *
+                         * it disables polymorphic recursion but a good way to
+                         * allow monomorphic recursive functions
+                         *)
+                        | Some (`Call (_, ts', t')) -> [], ts', t', st.s
+                        | Some _ -> failwith "BUG: find_rec_call returned not Call constraint"
                     in
 
                     let st = { st with s } in
@@ -1224,7 +1325,9 @@ module Type = struct
                 let not_matchable () = raise @@ Failure (NotMatchable (t, ps), c_aux, st.s) in
 
                 begin match shaps st.s t with
-                | `LVar (_, l) -> handle_lvar st l c_aux
+                | `LVar (_, l) -> handle_lvar l
+
+                (* TODO: just reassign Match on row variable? *)
                 | `Sexp (_, Some _) -> None
                 | `Sexp (xs, None) as t ->
                     let f x ts (cs, st) =
@@ -1250,7 +1353,7 @@ module Type = struct
                      * monomorphization of all S-expression types
                      *)
 
-                    handle_lvar st l c_aux
+                    handle_lvar l
 
                 | `Sexp _ ->
                     let xs = SexpConstructors.singleton (x, List.length ts) ts in
@@ -1273,6 +1376,8 @@ module Type = struct
 
                 List.map f
             in
+
+            (* TODO: assume that constraint would be one of residuals *)
 
             match c with
             | `Ind (t1, t2) ->
@@ -1395,7 +1500,7 @@ module Type = struct
             method full = full
 
             method run : 'a. Subst.t -> (st -> 'a) -> 'a =
-                fun s f -> f { s = s; r = [] }
+                fun s f -> f { s = s ; r = [] }
         end
 
     (* type inferrer *)
@@ -1529,7 +1634,13 @@ module Type = struct
                 let t = new_tv () in
                 St.return (return (`Eq (t2, `Int)) :: return (`Ind (t1, t)) :: c1 @ c2, t)
 
-            | E.Name x -> St.return ([], Context.find x ctx)
+            | E.Name x ->
+                begin try St.return ([], Context.find x ctx)
+                with Not_found ->
+                    failwith @@ Printf.sprintf "infer: unbound variable \"%s\" at [%d:%d, %s]"
+                        x inf.pos.row inf.pos.col inf.name
+                end
+
             | E.Int 0 -> St.return ([], new_tv ())
             | E.Int _ -> St.return ([], `Int)
             | E.String _ -> St.return ([], `String)
@@ -1549,7 +1660,7 @@ module Type = struct
                 let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
                 let (c, t), s = infer_t ctx' b s in
 
-                let Simpl.{ s; r = c } =
+                let Simpl.{ s ; r = c } =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx (level - 1) level in
                     simplify#run s @@ simplify#full c
@@ -1566,7 +1677,7 @@ module Type = struct
 
                 current_level := !current_level - 1 ;
 
-                let bc, Simpl.{ s; r = fc } =
+                let bc, Simpl.{ s ; r = fc } =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx level level in
                     simplify#run s @@ simplify#full_deterministic c
@@ -1655,7 +1766,7 @@ module Type = struct
 
             current_decls := (inf.name, t', !current_decls) :: old_decls ;
 
-            let c' = `Eq (t', t), { path = !current_path ; pos = (snd v).pos; parents = [] } in
+            let c' = `Eq (t', t), { path = !current_path ; pos = (snd v).pos ; parents = [] } in
             St.return @@ c' :: c
 
         | E.Fun (xs, b), inf -> infer_decl ctx (E.Var (E.Lambda (xs, b), snd b), inf)
