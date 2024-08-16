@@ -204,6 +204,135 @@ module Type = struct
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
 
+    let rec lex_compare = function
+    | [] -> 0
+    | f :: fs ->
+        let x = f () in
+        if x = 0 then lex_compare fs else x
+
+    let rec compare_t (t1 : t) (t2 : t) = match t1, t2 with
+    | `GVar x, `GVar y -> Int.compare x y
+    | `GVar _, _ -> -1
+    | _, `GVar _ -> 1
+    | `LVar (x, _), `LVar (y, _) -> Int.compare x y
+    | `LVar _, _ -> -1
+    | _, `LVar _ -> 1
+    | `Int, `Int -> 0
+    | `Int, _ -> -1
+    | _, `Int -> 1
+    | `String, `String -> 0
+    | `String, _ -> -1
+    | _, `String -> 1
+    | `Array t1, `Array t2 -> compare_t t1 t2
+    | `Array _, _ -> -1
+    | _, `Array _ -> 1
+    | `Sexp xs, `Sexp ys -> compare_sexp xs ys
+    | `Sexp _, _ -> -1
+    | _, `Sexp _ -> 1
+    | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) ->
+        lex_compare [ (fun () -> IS.compare xs1 xs2)
+                    ; (fun () -> List.compare compare_c c1 c2)
+                    ; (fun () -> List.compare compare_t ts1 ts2)
+                    ; (fun () -> compare_t t1 t2)
+                    ]
+
+    | `Arrow _, _ -> -1
+    | _, `Arrow _ -> 1
+    | `Mu (x1, t1), `Mu (x2, t2) ->
+        lex_compare [ (fun () -> Int.compare x1 x2)
+                    ; (fun () -> compare_t t1 t2)
+                    ]
+
+    | `Mu _, _ -> -1
+    | _, `Mu _ -> 1
+    [@@warning "-11"]
+
+    and compare_sexp (xs1, row1 : sexp) (xs2, row2 : sexp) =
+        lex_compare [ (fun () -> Option.compare Int.compare row1 row2)
+                    ; (fun () -> SexpConstructors.compare (List.compare compare_t) xs1 xs2)
+                    ]
+
+    and compare_p (p1 : p) (p2 : p) = match p1, p2 with
+    | `Wildcard, `Wildcard -> 0
+    | `Wildcard, _ -> -1
+    | _, `Wildcard -> 1
+    | `Typed (t1, p1), `Typed (t2, p2) ->
+        lex_compare [ (fun () -> compare_t t1 t2)
+                    ; (fun () -> compare_p p1 p2)
+                    ]
+
+    | `Typed _, _ -> -1
+    | _, `Typed _ -> 1
+    | `Array ps1, `Array ps2 -> List.compare compare_p ps1 ps2
+    | `Array _, _ -> -1
+    | _, `Array _ -> 1
+    | `Sexp (x1, ps1), `Sexp (x2, ps2) ->
+        lex_compare [ (fun () -> String.compare x1 x2)
+                    ; (fun () -> List.compare compare_p ps1 ps2)
+                    ]
+
+    | `Sexp _, _ -> -1
+    | _, `Sexp _ -> 1
+    | `Boxed, `Boxed -> 0
+    | `Boxed, _ -> -1
+    | _, `Boxed -> 1
+    | `Unboxed, `Unboxed -> 0
+    | `Unboxed, _ -> -1
+    | _, `Unboxed -> 1
+    | `StringTag, `StringTag -> 0
+    | `StringTag, _ -> -1
+    | _, `StringTag -> 1
+    | `ArrayTag, `ArrayTag -> 0
+    | `ArrayTag, _ -> -1
+    | _, `ArrayTag -> 1
+    | `SexpTag, `SexpTag -> 0
+    | `SexpTag, _ -> -1
+    | _, `SexpTag -> 1
+    | `FunTag, `FunTag -> 0
+    | `FunTag, _ -> -1
+    | _, `FunTag -> 1
+    [@@warning "-11"]
+
+    and compare_c (c1 : c) (c2 : c) = match c1, c2 with
+    | `Eq (l1, r1), `Eq (l2, r2) ->
+        lex_compare [ (fun () -> compare_t l1 l2)
+                    ; (fun () -> compare_t r1 r2)
+                    ]
+
+    | `Eq _, _ -> -1
+    | _, `Eq _ -> 1
+    | `Ind (l1, r1), `Ind (l2, r2) ->
+        lex_compare [ (fun () -> compare_t l1 l2)
+                    ; (fun () -> compare_t r1 r2)
+                    ]
+
+    | `Ind _, _ -> -1
+    | _, `Ind _ -> 1
+    | `Call (t1, ts1, s1), `Call (t2, ts2, s2) ->
+        lex_compare [ (fun () -> compare_t t1 t2)
+                    ; (fun () -> List.compare compare_t ts1 ts2)
+                    ; (fun () -> compare_t s1 s2)
+                    ]
+
+    | `Call _, _ -> -1
+    | _, `Call _ -> 1
+    | `Match (t1, ps1), `Match (t2, ps2) ->
+        lex_compare [ (fun () -> compare_t t1 t2)
+                    ; (fun () -> List.compare compare_p ps1 ps2)
+                    ]
+
+    | `Match _, _ -> -1
+    | _, `Match _ -> 1
+    | `Sexp (x1, t1, ts1), `Sexp (x2, t2, ts2) ->
+        lex_compare [ (fun () -> String.compare x1 x2)
+                    ; (fun () -> compare_t t1 t2)
+                    ; (fun () -> List.compare compare_t ts1 ts2)
+                    ]
+
+    | `Sexp _, _ -> -1
+    | _, `Sexp _ -> 1
+    [@@warning "-11"]
+
     (* substitution *)
 
     module Subst = struct
@@ -1062,7 +1191,6 @@ module Type = struct
         let unify = unify var_gen in
 
         (* shaps = SHallow APply Substitution *)
-        (* TODO: unfold Mu types *)
         let rec shaps s = function
         | `LVar (x, l) ->
             let x, l = Subst.find_var (x, l) s in
@@ -1383,8 +1511,6 @@ module Type = struct
                 List.map f
             in
 
-            (* TODO: assume that constraint would be one of residuals *)
-
             match c with
             | `Ind (t1, t2) ->
                 begin match shaps st.s t1 with
@@ -1411,10 +1537,6 @@ module Type = struct
 
             | `Match (t, _) ->
                 begin match shaps st.s t with
-                | `LVar (_, l) when l >= level && greedy > 1 ->
-                    (* naïve attempt to monomorphize free variable *)
-                    gen [[t, `Int]]
-
                 | `Sexp (_, Some row) when greedy > 0 ->
                     (* greedy assumption that there aren't more constructors in S-expression *)
                     let t1 = `Sexp (SexpConstructors.empty, Some row) in
@@ -1720,6 +1842,8 @@ module Type = struct
                 in
 
                 current_level := !current_level - 1 ;
+
+                let bc = List.sort_uniq compare_c bc in
 
                 (fc, `Arrow (xs, bc, ts, t)), s
 
