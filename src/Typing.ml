@@ -112,8 +112,6 @@ module Type = struct
 
     module SexpConstructors = Map.Make(SexpLabel)
 
-    (* TODO: maybe GVar will be more useful in de Bruijn encoding? *)
-
     type t = [
     | `GVar     of int              (* ground type variable *)
     | `LVar     of int * int        (* logic type variable *)
@@ -374,14 +372,10 @@ module Type = struct
     let apply_subst s =
         let vars_path = Stdlib.ref IM.empty in
 
-        let rec subst_t bvs : t -> t = function
-        | `GVar x as t ->
-            if not @@ IS.mem x bvs then failwith "apply_subst: free ground variable" ;
-            t
+        let rec subst_t : t -> t = function
+        | `GVar _ as t -> t
 
         | `LVar (x, l) ->
-            if IS.mem x bvs then failwith "apply_subst: bound logic variable" ;
-
             let x, l = Subst.find_var (x, l) s in
 
             let old_vars_path = !vars_path in
@@ -397,7 +391,7 @@ module Type = struct
                 | Some t ->
                     vars_path := IM.add x false old_vars_path ;
 
-                    let res = subst_t bvs t in
+                    let res = subst_t t in
 
                     let new_vars_path = !vars_path in
                     vars_path := IM.remove x new_vars_path ;
@@ -410,20 +404,19 @@ module Type = struct
 
         | `Int -> `Int
         | `String -> `String
-        | `Array t -> `Array (subst_t bvs t)
-        | `Sexp xs -> `Sexp (subst_sexp bvs xs)
+        | `Array t -> `Array (subst_t t)
+        | `Sexp xs -> `Sexp (subst_sexp xs)
         | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            `Arrow (xs, List.map (subst_c bvs) c, List.map (subst_t bvs) ts, subst_t bvs t)
+            `Arrow (xs, List.map subst_c c, List.map subst_t ts, subst_t t)
 
-        | `Mu (x, t) -> `Mu (x, subst_t (IS.add x bvs) t)
+        | `Mu (x, t) -> `Mu (x, subst_t t)
 
-        and subst_sexp bvs (xs, row) =
+        and subst_sexp (xs, row) =
             let row = Fun.flip Option.map row @@ Fun.flip Subst.find_row_var s in
 
             match Option.bind row @@ Fun.flip Subst.find_sexp s with
             | None ->
-                let xs = SexpConstructors.map (List.map @@ subst_t bvs) xs in
+                let xs = SexpConstructors.map (List.map subst_t) xs in
                 xs, row
 
             | Some (xs', row') ->
@@ -431,13 +424,13 @@ module Type = struct
                 let xs = SexpConstructors.union f xs xs' in
 
                 (* tail recursion intended *)
-                subst_sexp bvs (xs, row')
+                subst_sexp (xs, row')
 
-        and subst_p bvs : p -> p = function
+        and subst_p : p -> p = function
         | `Wildcard -> `Wildcard
-        | `Typed (t, p) -> `Typed (subst_t bvs t, subst_p bvs p)
-        | `Array ps -> `Array (List.map (subst_p bvs) ps)
-        | `Sexp (x, ps) -> `Sexp (x, List.map (subst_p bvs) ps)
+        | `Typed (t, p) -> `Typed (subst_t t, subst_p p)
+        | `Array ps -> `Array (List.map subst_p ps)
+        | `Sexp (x, ps) -> `Sexp (x, List.map subst_p ps)
         | `Boxed -> `Boxed
         | `Unboxed -> `Unboxed
         | `StringTag -> `StringTag
@@ -445,12 +438,12 @@ module Type = struct
         | `SexpTag -> `SexpTag
         | `FunTag -> `FunTag
 
-        and subst_c bvs : c -> c = function
-        | `Eq (t1, t2) -> `Eq (subst_t bvs t1, subst_t bvs t2)
-        | `Ind (t1, t2) -> `Ind (subst_t bvs t1, subst_t bvs t2)
-        | `Call (t, ts, t') -> `Call (subst_t bvs t, List.map (subst_t bvs) ts, subst_t bvs t')
-        | `Match (t, ps) -> `Match (subst_t bvs t, List.map (subst_p bvs) ps)
-        | `Sexp (x, t, ts) -> `Sexp (x, subst_t bvs t, List.map (subst_t bvs) ts)
+        and subst_c : c -> c = function
+        | `Eq (t1, t2) -> `Eq (subst_t t1, subst_t t2)
+        | `Ind (t1, t2) -> `Ind (subst_t t1, subst_t t2)
+        | `Call (t, ts, t') -> `Call (subst_t t, List.map subst_t ts, subst_t t')
+        | `Match (t, ps) -> `Match (subst_t t, List.map subst_p ps)
+        | `Sexp (x, t, ts) -> `Sexp (x, subst_t t, List.map subst_t ts)
         in
 
         object
@@ -1000,7 +993,7 @@ module Type = struct
     (* unification, returns substitution and residual equations *)
 
     exception Unification_failure of Subst.t * t * t
-    exception Sexp_unification_failure of Subst.t
+    exception Custom_unification_failure of Subst.t
 
     let unify var_gen =
         let new_var () =
@@ -1010,12 +1003,19 @@ module Type = struct
             idx
         in
 
+        let module VMap = struct
+
+            include Map.Make(Int)
+
+            type nonrec t = int option Stdlib.ref t
+        end in
+
         let module Mut = struct
 
             type t = Subst.t -> Subst.t
         end in
 
-        let rec unify_t : t * t -> Mut.t = function
+        let rec unify_t (ctx : VMap.t) : t * t -> Mut.t = function
 
         (* === var vs var === *)
 
@@ -1028,7 +1028,7 @@ module Type = struct
                 (* `bind_vars` respects leveling *)
                 try Subst.bind_vars (x, l) (y, k) s
                 with Subst.Need_unification (t1, t2) ->
-                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
+                    unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
         (* === var vs term === *)
@@ -1049,37 +1049,73 @@ module Type = struct
 
                 try Subst.bind_type (x, l) t s
                 with Subst.Need_unification (t1, t2) ->
-                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
+                    unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
-        | t1, (`LVar _ as t2) -> unify_t (t2, t1)
+        | t1, (`LVar _ as t2) -> unify_t ctx (t2, t1)
 
         (* === term vs term === *)
 
         | `GVar x, `GVar y when x = y -> Fun.id
+        | `GVar x, `GVar y when VMap.mem x ctx && VMap.mem y ctx ->
+            let x' = VMap.find x ctx in
+            let y' = VMap.find y ctx in
+
+            if Option.is_none !x' && Option.is_none !y' then begin
+                x' := Some y ;
+                y' := Some x ;
+                Fun.id
+            end else if !x' = Some y && !y' = Some x then
+                Fun.id
+            else
+                fun s -> raise @@ Unification_failure (s, `GVar x, `GVar y)
+
         | `Int, `Int -> Fun.id
         | `String, `String -> Fun.id
-        | `Array t1, `Array t2 -> unify_t (t1, t2)
+        | `Array t1, `Array t2 -> unify_t ctx (t1, t2)
         | `Sexp xs1, `Sexp xs2 ->
-            let unify_sexp = unify_sexp (xs1, xs2) in
+            let unify_sexp = unify_sexp ctx (xs1, xs2) in
 
             fun s ->
                 begin try unify_sexp s
-                with Sexp_unification_failure s ->
+                with Custom_unification_failure s ->
                     raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
                 end
 
-        | `Arrow (_, _, _, _) as t1, (`Arrow (_, _, _, _) as t2) ->
-            if t1 = t2 then Fun.id else failwith
-                @@ Printf.sprintf "TODO: unify arrows: [%s] [%s]" (show_t t1) (show_t t2)
+        | `Arrow (xs1, c1, ts1, t1) as ft1, (`Arrow (xs2, c2, ts2, t2) as ft2) ->
+            if IS.cardinal xs1 <> IS.cardinal xs2 || List.length c1 <> List.length c2
+                || (xs1 <> xs2 && not (IS.disjoint xs1 xs2))
+            then
+                fun s -> raise @@ Unification_failure (s, ft1, ft2)
 
-        | `Mu (_, _) as t1, (`Mu (_, _) as t2) ->
-            if t1 = t2 then Fun.id else failwith
-                @@ Printf.sprintf "TODO: unify recursive types: [%s] [%s]" (show_t t1) (show_t t2)
+            else
+                let ctx = if xs1 = xs2 then ctx else
+                    let f x = VMap.add x @@ Stdlib.ref None in
+                    let ctx = IS.fold f xs1 ctx in
+                    let ctx = IS.fold f xs2 ctx in
+                    ctx
+                in
+
+                fun s ->
+                    let s =
+                        try List.fold_left2 (fun s c1 c2 -> unify_c ctx (c1, c2) s) s c1 c2
+                        with Custom_unification_failure s ->
+                            raise @@ Unification_failure (s, ft1, ft2)
+                    in
+
+                    let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
+                    let s = unify_t ctx (t1, t2) s in
+                    s
+
+        | `Mu (x1, t1), `Mu (x2, t2) ->
+            if x1 = x2 then unify_t ctx (t1, t2) else
+                let ctx = VMap.add x1 (Stdlib.ref None) ctx in
+                let ctx = VMap.add x2 (Stdlib.ref None) ctx in
+                unify_t ctx (t1, t2)
 
         | t1, t2 -> fun s -> raise @@ Unification_failure (s, t1, t2)
 
-        and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
+        and unify_sexp (ctx : VMap.t) ((xs1, row1), (xs2, row2)) : Mut.t =
             let rec bind_rows s = function
             | None, None -> s
             | Some row1, None -> Subst.bind_sexp row1 (SexpConstructors.empty, None) s
@@ -1093,7 +1129,7 @@ module Type = struct
                 bind_rows s (None, Some row2)
 
             | Some row1, xs -> Subst.bind_sexp row1 xs s
-            | _ -> raise @@ Sexp_unification_failure s
+            | _ -> raise @@ Custom_unification_failure s
             in
 
             let xs1'empty = SexpConstructors.is_empty xs1 in
@@ -1102,15 +1138,15 @@ module Type = struct
             if xs1'empty && xs2'empty then begin fun s ->
                 try bind_rows s (row1, row2)
                 with Subst.Need_unification (t1, t2) ->
-                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
+                    unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs1'empty then begin fun s ->
                 try bind_row_sexp s (row1, (xs2, row2))
                 with Subst.Need_unification (t1, t2) ->
-                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
+                    unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs2'empty then begin
-                unify_sexp ((xs2, row2), (xs1, row1))
+                unify_sexp ctx ((xs2, row2), (xs1, row1))
 
             end else begin
                 let module SLS = Set.Make(SexpLabel) in
@@ -1123,7 +1159,7 @@ module Type = struct
                     let ts1 = SexpConstructors.find x xs1 in
                     let ts2 = SexpConstructors.find x xs2 in
 
-                    List.fold_left2 (fun s t1 t2 -> unify_t (t1, t2) s) s ts1 ts2
+                    List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2
                 in
 
                 let both = SLS.inter xs1'labels xs2'labels in
@@ -1139,7 +1175,7 @@ module Type = struct
                     let row = new_var () in
 
                     let f row' xs =
-                        unify_sexp ((SexpConstructors.empty, row'), (xs, Some row))
+                        unify_sexp ctx ((SexpConstructors.empty, row'), (xs, Some row))
                     in
 
                     let row1_f = f row1 xs2_only in
@@ -1148,16 +1184,69 @@ module Type = struct
                     fun s -> row2_f @@ row1_f @@ both_f s
 
                 end else begin
-                    let only_f = unify_sexp ((xs1_only, row1), (xs2_only, row2)) in
+                    let only_f = unify_sexp ctx ((xs1_only, row1), (xs2_only, row2)) in
                     fun s -> only_f @@ both_f s
                 end
             end
+
+        and unify_p (ctx : VMap.t) : p * p -> Mut.t = function
+        | `Wildcard, `Wildcard -> Fun.id
+        | `Typed (t1, p1), `Typed (t2, p2) -> fun s ->
+            let s = unify_t ctx (t1, t2) s in
+            let s = unify_p ctx (p1, p2) s in
+            s
+
+        | `Array ps1, `Array ps2 when List.length ps1 = List.length ps2 -> fun s ->
+            List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2
+
+        | `Sexp (x1, ps1), `Sexp (x2, ps2)
+        when x1 = x2 && List.length ps1 = List.length ps2 -> fun s ->
+            List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2
+
+        | `Boxed, `Boxed -> Fun.id
+        | `Unboxed, `Unboxed -> Fun.id
+        | `StringTag, `StringTag -> Fun.id
+        | `ArrayTag, `ArrayTag -> Fun.id
+        | `SexpTag, `SexpTag -> Fun.id
+        | `FunTag, `FunTag -> Fun.id
+        | _, _ -> fun s -> raise @@ Custom_unification_failure s
+
+        and unify_c (ctx : VMap.t) : c * c -> Mut.t = function
+        | `Eq (l1, r1), `Eq (l2, r2) -> fun s ->
+            let s = unify_t ctx (l1, l2) s in
+            let s = unify_t ctx (r1, r2) s in
+            s
+
+        | `Ind (l1, r1), `Ind (l2, r2) -> fun s ->
+            let s = unify_t ctx (l1, l2) s in
+            let s = unify_t ctx (r1, r2) s in
+            s
+
+        | `Call (ft1, ts1, t1), `Call (ft2, ts2, t2)
+        when List.length ts1 = List.length ts2 -> fun s ->
+            let s = unify_t ctx (ft1, ft2) s in
+            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
+            let s = unify_t ctx (t1, t2) s in
+            s
+
+        | `Match (t1, ps1), `Match (t2, ps2) when List.length ps1 = List.length ps2 -> fun s ->
+            let s = unify_t ctx (t1, t2) s in
+            let s = List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2 in
+            s
+
+        | `Sexp (x1, t1, ts1), `Sexp (x2, t2, ts2)
+        when x1 = x2 && List.length ts1 = List.length ts2 -> fun s ->
+            let s = unify_t ctx (t1, t2) s in
+            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
+            s
+
+        | _, _ -> fun s -> raise @@ Custom_unification_failure s
         in
 
         object
 
-            method t = unify_t
-            method sexp = unify_sexp
+            method t = unify_t VMap.empty
+            method sexp = unify_sexp VMap.empty
         end
 
     (* constraints simplifier *)
@@ -1571,7 +1660,7 @@ module Type = struct
                 then hlp (greedy + 1) [] @@ List.rev cs'
                 else begin
                     let cs = List.rev cs' in
-                    let apply_subst = (apply_subst st.s)#c IS.empty in
+                    let apply_subst = (apply_subst st.s)#c in
                     let cs = List.map (fun (c, _) -> apply_subst c) cs in
                     Printf.printf "CONSTRAINTS: %s\n" @@ show_list show_c cs ;
 

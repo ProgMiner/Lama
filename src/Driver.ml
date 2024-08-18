@@ -276,7 +276,7 @@ let[@ocaml.warning "-32"] main =
 
                 let finish_types =
                     let monomorphize = (T.Type.monomorphize `Int)#t T.Type.IS.empty in
-                    let apply_subst = (T.Type.apply_subst s)#t T.Type.IS.empty in
+                    let apply_subst = (T.Type.apply_subst s)#t in
                     fun t -> monomorphize @@ apply_subst t
                 in
 
@@ -309,44 +309,44 @@ let[@ocaml.warning "-32"] main =
                         List.iter (print_err @@ ind ^ "| ") errs
 
                     | Unification (t1, t2) ->
-                        let apply_subst = apply_subst#t T.Type.IS.empty in
+                        let apply_subst = apply_subst#t in
 
                         Printf.printf "unable to unify types:\n" ;
                         Printf.printf "%s| - %s\n" ind @@ T.Type.show_t @@ apply_subst t1 ;
                         Printf.printf "%s| - %s\n" ind @@ T.Type.show_t @@ apply_subst t2 ;
 
                     | NotIndexable t ->
-                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "type is not indexable: %s\n" t ;
 
                     | NotCallable t ->
-                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "type is not callable: %s\n" t ;
 
                     | NotMatchable (t, ps) ->
-                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "type is not matchable with following patterns: %s\n" t ;
 
-                        let f p = T.Type.show_p @@ apply_subst#p T.Type.IS.empty p in
+                        let f p = T.Type.show_p @@ apply_subst#p p in
                         let ps = List.map f ps in
 
                         List.iter (Printf.printf "%s| - %s\n" ind) ps
 
                     | NotSexp t ->
-                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "type is not S-expression type: %s\n" t ;
 
                     | WrongArgsNum (t, n) ->
-                        let t = T.Type.show_t @@ apply_subst#t T.Type.IS.empty t in
+                        let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "wrong number of arguments (given %d) in call: %s\n" n t ;
 
                     | NotSupported ->
-                        let c = T.Type.show_c @@ apply_subst#c T.Type.IS.empty c in
+                        let c = T.Type.show_c @@ apply_subst#c c in
                         Printf.printf "constraint solving is not supported: %s\n" c ;
                     end ;
 
                     let c = c :: inf.parents in
-                    let c = List.map (apply_subst#c T.Type.IS.empty) c in
+                    let c = List.map apply_subst#c c in
 
                     Printf.printf "%s+ failed constraint solution trace:\n" ind ;
                     List.iter (fun c -> Printf.printf "%s| - %s\n" ind @@ T.Type.show_c c) c ;
