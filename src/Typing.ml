@@ -1689,7 +1689,18 @@ module Type = struct
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
-            | `Match _ -> Option.to_list @@ single_step_det st (c, inf)
+            | `Match (t, _) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) when l >= level && greedy > 0 ->
+                    gen [ [t, `Int]
+                        ; [t, `String]
+                        ; [t, `Array (`LVar (new_var (), l))]
+                        ; [t, `Sexp (SexpConstructors.empty, Some (new_var ()))]
+                        ]
+
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
             | `Sexp (_, t, _) ->
                 begin match shaps st.s t with
                 | `LVar (_, l) when l >= level ->
