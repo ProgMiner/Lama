@@ -71,7 +71,7 @@ public fun find (f, l) {
 }
 
 public fun flatten (l) {
-  var res = [0, {}], curr = [res];
+  var res = {0}, curr = [res];
 
   fun append (x) {
     var new = x : {};
@@ -86,7 +86,7 @@ public fun flatten (l) {
 }
 
 public fun deepFlatten (l) {
-  var res = [0, {}], curr = [res];
+  var res = {0}, curr = [res];
 
   fun append (x) {
     var new = x : {};

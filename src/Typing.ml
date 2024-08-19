@@ -2164,36 +2164,93 @@ open Ostap
 
 module Interface = struct
 
-    (*
-    (* Generates an interface file. *)
-    let gen ((imps, ifxs), p) =
-      let buf = Buffer.create 256 in
-      let append str = Buffer.add_string buf str in
-      List.iter (fun i -> append "I,"; append i; append ";\n") imps;
-      (match p with
-       | Expr.Scope (decls, _) ->
-          List.iter
-            (function
-             | (name, (`Public, item)) | (name, (`PublicExtern, item))  ->
-                (match item with
-                 | `Fun _      -> append "F,"; append name; append ";\n"
-                 | `Variable _ -> append "V,"; append name; append ";\n"
-                )
-             | _ -> ()
-            )
-            decls;
-       | _ -> ());
-      List.iter
-        (function (ass, op, loc) ->
-           let append_op op = append "\""; append op; append "\"" in
-           append (match ass with `Lefta -> "L," | `Righta -> "R," | _ -> "N,");
-           append_op op;
-           append ",";
-           (match loc with `At op -> append "T,"; append_op op | `After op -> append "A,"; append_op op | `Before op -> append "B,"; append_op op);
-           append ";\n"
-        ) ifxs;
-      Buffer.contents buf
-    *)
+    (* Generates an interface file *)
+    let gen ctx =
+        let buf = Buffer.create 256 in
+        let append str = Buffer.add_string buf str in
+        let append_i x = append (string_of_int x) in
+
+        let append_list ?(prefix="") ?(suffix="") ?(sep=", ") append_x = function
+        | [] -> ()
+        | x :: xs ->
+            append prefix ;
+            append_x x ;
+            List.iter (fun x -> append sep ; append_x x) xs ;
+            append suffix
+        in
+
+        let rec append_t = function
+        | `GVar x -> append_i x
+        | `LVar _ -> failwith "BUG: logic variable in typed interface"
+        | `Int -> append "Int"
+        | `String -> append "String"
+        | `Array t -> append "[" ; append_t t ; append "]"
+        | `Sexp xs -> append_sexp xs
+        | `Arrow (xs, c, ts, t) ->
+            append "forall" ;
+
+            append_list ~prefix:" " append_i @@ Type.IS.elements xs ;
+            append "." ;
+
+            append_list ~prefix:" " append_c c ;
+
+            append " => (" ;
+            append_list append_t ts ;
+            append ") -> " ;
+            append_t t
+
+        | `Mu (x, t) ->
+            append "mu " ;
+            append_i x ;
+            append ". " ;
+            append_t t
+
+        and append_sexp (xs, row : Type.sexp) =
+            if row <> None then failwith "BUG: row variable in typed interface" ;
+
+            let f ((x, _), ts) = append x ; append_list ~prefix:" (" ~suffix:")" append_t ts in
+            append_list ~sep:" + " f @@ Type.SexpConstructors.bindings xs
+
+        and append_p = function
+        | `Wildcard -> append "_"
+        | `Typed (t, p) -> append_t t ; append " @ " ; append_p p
+        | `Array ps -> append "[" ; append_list append_p ps ; append "]"
+        | `Sexp (x, ps) -> append x ; append_list ~prefix:" (" ~suffix:")" append_p ps
+        | `Boxed -> append "#box"
+        | `Unboxed -> append "#val"
+        | `StringTag -> append "#string"
+        | `ArrayTag -> append "#array"
+        | `SexpTag -> append "#sexp"
+        | `FunTag -> append "#fun"
+
+        and append_c = function
+        | `Eq _ -> failwith "BUG: Eq constraint in typed interface"
+        | `Ind (t1, t2) -> append "Ind (" ; append_t t1 ; append ", " ; append_t t2 ; append ")"
+        | `Call (ft, ts, t) ->
+            append "Call (" ;
+            append_t ft ;
+            append_list ~prefix:", " append_t ts ;
+            append ", " ;
+            append_t t ;
+            append ")"
+
+        | `Match (t, ps) ->
+            append "Match (" ;
+            append_t t ;
+            append_list ~prefix:", " append_p ps ;
+            append ")"
+
+        | `Sexp (x, t, ts) ->
+            append "Sexp (" ;
+            append x ;
+            append ", " ;
+            append_t t ;
+            append_list ~prefix:", " append_t ts ;
+            append ")"
+        in
+
+        Type.Context.iter (fun x t -> append x ; append " : " ; append_t t ; append " ;\n") ctx ;
+        Buffer.contents buf
 
     (* Read an interface file *)
     let [@ocaml.warning "-26-27"] read max_var fname =
@@ -2206,7 +2263,7 @@ module Interface = struct
             tInt   : "Int" { `Int } ;
             tString: "String" { `String } ;
             tArray : "[" t:typ "]" { `Array t } ;
-            tSexp  : xs:(!(Util.list)[tSexpC]) {
+            tSexp  : xs:(!(Util.listBy)[ostap (" + ")][tSexpC]) {
                 let f xs (x, ts) = Type.SexpConstructors.add (x, List.length ts) ts xs in
                 let xs = List.fold_left f Type.SexpConstructors.empty xs in
                 `Sexp (xs, None)

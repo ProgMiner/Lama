@@ -293,7 +293,7 @@ let[@ocaml.warning "-32"] main =
                 print_endline "Public declarations:" ;
                 print_pub_decls decls ;
 
-                (* TODO: save typed interface file for modularity *)
+                cmd#dump_file "ti" (T.Interface.gen decls)
 
             with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in

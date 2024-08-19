@@ -22,7 +22,7 @@ public fun mapArray (f, a) {
 }
 
 public fun arrayList (a) {
-  var i = 0, res = [0, {}], curr = res;
+  var i = 0, res = {0}, curr = res;
 
   for skip, i < a.length, i := i + 1 do
     curr [1] := a [i] : curr [1];

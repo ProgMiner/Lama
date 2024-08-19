@@ -22,6 +22,7 @@ STM.o: List.o Fun.o
 
 %.o: %.lama
 	LAMA=../runtime $(LAMAC) -I . -c $<
+	LAMA=../runtime $(LAMAC) -I . -t $<
 
 clean:
 	rm -Rf *.s *.o *.i *~
