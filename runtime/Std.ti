@@ -1,0 +1,4 @@
+read : forall. => () -> Int ;
+write : forall 1. => (Int) -> 1 ;
+length : forall 2. Match (2, #box) => (2) -> Int ;
+string : forall 3. => (3) -> String ;

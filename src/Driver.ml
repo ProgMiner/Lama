@@ -204,24 +204,20 @@ let[@ocaml.warning "-32"] main =
 
             let prog' = T.Expr.from_language cmd#basename @@ snd prog in
 
-            (* TODO: load type interface files for imported modules *)
+            let max_var = Stdlib.ref 0 in
+            let ctx =
+                let mods = fst @@ fst prog in
+                let ctx = List.map (T.Interface.find max_var cmd#get_include_paths) mods in
+                let ctx = List.flatten @@ List.map snd ctx in
 
-            let ctx : T.Type.t T.Type.Context.t = T.Type.Context.of_seq @@ List.to_seq
-                [ "read", `Arrow (T.Type.IS.empty, [], [], `Int)
-                ; "write", `Arrow (T.Type.IS.of_seq @@ List.to_seq [1], [], [`Int], `GVar 1)
-                ; "length", `Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [1]
-                    , [`Match (`GVar 1, [`Boxed])]
-                    , [`GVar 1]
-                    , `Int
-                    )
-                ; "string", `Arrow
-                    ( T.Type.IS.of_seq @@ List.to_seq [1]
-                    , []
-                    , [`GVar 1]
-                    , `String
-                    )
-                ] in
+                let f ctx (x, t) = T.Type.Context.add x t ctx in
+                List.fold_left f T.Type.Context.empty ctx
+            in
+
+            Printf.printf "Max variable: %d\n" !max_var ;
+
+            print_endline "Context:" ;
+            T.Type.Context.iter (fun x t -> Printf.printf "%s : %s\n" x (T.Type.show_t t)) ctx ;
 
             let print_decls decls =
                 let rec f indent (x, t, inner) =
@@ -243,7 +239,7 @@ let[@ocaml.warning "-32"] main =
             in
 
             begin try
-                let infer = T.Type.infer () in
+                let infer = T.Type.infer !max_var in
                 let (c, _), s = infer#term ctx prog' T.Type.Subst.empty in
                 let decls = infer#all_decls () in
 

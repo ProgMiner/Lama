@@ -1503,7 +1503,7 @@ module Type = struct
                     | None -> st
                     | Some row ->
                         let on_unify ({ s ; _ } as st) =
-                            let (Some sexp) = Subst.find_sexp row s [@@warning "-8"] in
+                            let [@warning "-8"] (Some sexp) = Subst.find_sexp row s in
                             [`Ind (`Sexp sexp, t2)], st
                         in
 
@@ -1810,10 +1810,10 @@ module Type = struct
 
     type decl_type = string * t * decl_type list
 
-    let infer () =
+    let infer prev_var =
         let module E = Expr in
 
-        let prev_var_idx = Stdlib.ref 0 in
+        let prev_var_idx = Stdlib.ref prev_var in
         let current_level = Stdlib.ref 0 in
 
         let public_names = Stdlib.ref Context.empty in
@@ -2158,4 +2158,122 @@ module Type = struct
             method p = mono_p
             method c = mono_c
         end
+end
+
+open Ostap
+
+module Interface = struct
+
+    (*
+    (* Generates an interface file. *)
+    let gen ((imps, ifxs), p) =
+      let buf = Buffer.create 256 in
+      let append str = Buffer.add_string buf str in
+      List.iter (fun i -> append "I,"; append i; append ";\n") imps;
+      (match p with
+       | Expr.Scope (decls, _) ->
+          List.iter
+            (function
+             | (name, (`Public, item)) | (name, (`PublicExtern, item))  ->
+                (match item with
+                 | `Fun _      -> append "F,"; append name; append ";\n"
+                 | `Variable _ -> append "V,"; append name; append ";\n"
+                )
+             | _ -> ()
+            )
+            decls;
+       | _ -> ());
+      List.iter
+        (function (ass, op, loc) ->
+           let append_op op = append "\""; append op; append "\"" in
+           append (match ass with `Lefta -> "L," | `Righta -> "R," | _ -> "N,");
+           append_op op;
+           append ",";
+           (match loc with `At op -> append "T,"; append_op op | `After op -> append "A,"; append_op op | `Before op -> append "B,"; append_op op);
+           append ";\n"
+        ) ifxs;
+      Buffer.contents buf
+    *)
+
+    (* Read an interface file *)
+    let [@ocaml.warning "-26-27"] read max_var fname =
+        let on_var x = max_var := Int.max !max_var x in
+
+        let ostap (
+            decl   : i:IDENT ":" t:typ ";" { (i, t) } ;
+            typ    : tVar | tInt | tString | tArray | tSexp | tArrow | tMu ;
+            tVar   : v:DECIMAL { on_var v ; `GVar v } ;
+            tInt   : "Int" { `Int } ;
+            tString: "String" { `String } ;
+            tArray : "[" t:typ "]" { `Array t } ;
+            tSexp  : xs:(!(Util.list)[tSexpC]) {
+                let f xs (x, ts) = Type.SexpConstructors.add (x, List.length ts) ts xs in
+                let xs = List.fold_left f Type.SexpConstructors.empty xs in
+                `Sexp (xs, None)
+            } ;
+            tSexpC : x:IDENT ts:(-"(" (!(Util.list)[typ]) -")")? {
+                x, match ts with None -> [] | Some ts -> ts
+            } ;
+            tArrow : "forall" xs:(!(Util.list0)[ostap (DECIMAL)])
+                     "." c:(!(Util.list0)[cnstr])
+                     "=>" "(" ts:(!(Util.list0)[typ]) ")"
+                     "->" t:typ
+            {
+                List.iter on_var xs ;
+                `Arrow (Type.IS.of_seq @@ List.to_seq xs, c, ts, t)
+            } ;
+            tMu    : "mu" x:DECIMAL "." t:typ { on_var x ; `Mu (x, t) } ;
+            pat    : pWildcard | pTyped | pArray | pSexp | pBoxed | pUnboxed
+                   | pStringTag | pArrayTag | pSexpTag | pFunTag ;
+            pWildcard: "_" { `Wildcard } ;
+            pTyped : t:typ "@" p:pat { `Typed (t, p) } ;
+            pArray : "[" ps:(!(Util.list0)[pat]) "]" { `Array ps } ;
+            pSexp  : x:IDENT ps:(-"(" (!(Util.list)[pat]) -")")? {
+                `Sexp (x, match ps with None -> [] | Some ps -> ps)
+            } ;
+            pBoxed : "#box" { `Boxed } ;
+            pUnboxed: "#val" { `Unboxed } ;
+            pStringTag: "#string" { `StringTag } ;
+            pArrayTag: "#array" { `ArrayTag } ;
+            pSexpTag: "#sexp" { `SexpTag } ;
+            pFunTag: "#fun" { `FunTag } ;
+            cnstr  : cInd | cCall | cMatch | cSexp ;
+            cInd   : "Ind" "(" t1:typ "," t2:typ ")" { `Ind (t1, t2) } ;
+            cCall  : "Call" "(" ft:typ "," ts:(typ -",")* t:typ ")" { `Call (ft, ts, t) } ;
+            cMatch : "Match" "(" t:typ ps:(-"," pat)* ")" { `Match (t, ps) } ;
+            cSexp  : "Sexp" "(" x:IDENT "," t:typ ts:(-"," typ)* ")" { `Sexp (x, t, ts) } ;
+            interface: decl*
+        ) in
+
+        try
+            let s = Util.read fname in
+
+            begin match Util.parse (object
+                inherit Matcher.t s
+                inherit Util.Lexers.ident [] s
+                inherit Util.Lexers.decimal s
+                inherit Util.Lexers.skip  [Matcher.Skip.whitespaces " \t\n"] s
+            end) (ostap (interface -EOF)) with
+            | `Ok intfs -> Some intfs
+            | `Fail err ->
+                failwith @@ Printf.sprintf "malformed typed interface file \"%s\": %s" fname err
+            end
+        with Sys_error _ -> None
+
+    let find max_var paths import : string * (string * Type.t) list =
+        let import' = import ^ ".ti" in
+
+        let rec inner = function
+        | [] -> None
+        | p::paths ->
+            begin match read max_var @@ Filename.concat p import' with
+            | Some i -> Some (p, i)
+            | None -> inner paths
+            end
+        in
+
+        match inner paths with
+        | Some (path, intfs) -> path, intfs
+        | None -> failwith
+            @@ Printf.sprintf "could not find a typed interface file for import \"%s\"" import
 end
