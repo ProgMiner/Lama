@@ -219,6 +219,8 @@ let[@ocaml.warning "-32"] main =
             print_endline "Context:" ;
             T.Type.Context.iter (fun x t -> Printf.printf "%s : %s\n" x (T.Type.show_t t)) ctx ;
 
+            (* TODO: unfold recursive types in loaded context *)
+
             let print_decls decls =
                 let rec f indent (x, t, inner) =
                     Printf.printf "%s- %s : %s\n" indent x @@ T.Type.show_t t ;
