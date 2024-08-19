@@ -16,7 +16,7 @@ module Make(T : Term) : sig
 
     val empty: t
 
-    val find_term: v -> t -> T.t option
+    val find_term: int -> t -> T.t option
     val find_var: v -> t -> v
 
     val bind_vars: v -> v -> t -> t
@@ -61,7 +61,7 @@ end = struct
             parent, parent_node
         end
 
-    let find_term (v, _) s =
+    let find_term v s =
         let _, node = find_internal v s in
         Option.bind node @@ fun { term; _ } -> term
 

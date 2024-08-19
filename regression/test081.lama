@@ -31,15 +31,8 @@ fun printList (l) {
 
 z := read ();
 
-x := Nil ;
-x := Cons (3, x) ;
-x := Cons (2, x) ;
-x := Cons (1, x) ;
-
-y := Nil ;
-y := Cons (300, y) ;
-y := Cons (200, y) ;
-y := Cons (100, y) ;
+x := Cons (1, Cons (2, Cons (3, Nil)));
+y := Cons (100, Cons (200, Cons (300, Nil)));
 
 case unzip (zip (Pair (x, y))) of
   Pair (x, y) -> printList (x); printList (y)

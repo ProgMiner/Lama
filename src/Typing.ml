@@ -361,7 +361,7 @@ module Type = struct
         let find_row_var row s = fst @@ find_var (row, row_level) s
 
         let find_type x s = Option.map unpack_type @@ find_term x s
-        let find_sexp x s = Option.map unpack_sexp @@ find_term (x, row_level) s
+        let find_sexp x s = Option.map unpack_sexp @@ find_term x s
 
         let bind_row_vars row1 row2 s = bind_vars (row1, row_level) (row2, row_level) s
 
@@ -386,7 +386,7 @@ module Type = struct
                 `GVar x
 
             end else begin
-                match Subst.find_type (x, l) s with
+                match Subst.find_type x s with
                 | None -> `LVar (x, l)
                 | Some t ->
                     vars_path := IM.add x false old_vars_path ;
@@ -488,7 +488,7 @@ module Type = struct
                     visited := IS.add x old_visited ;
 
                     if l <= level then s else
-                        begin match Subst.find_type (x, l) s with
+                        begin match Subst.find_type x s with
                         | Some t -> lift_t bvs t s
                         | None ->
                             let x' = new_var () in
@@ -586,7 +586,7 @@ module Type = struct
 
             let x, l = Subst.find_var (x, l) s in
 
-            begin match Subst.find_type (x, l) s with
+            begin match Subst.find_type x s with
             | None ->
                 if p l then begin
                     vars := IS.add x !vars ;
@@ -761,7 +761,7 @@ module Type = struct
 
             let x, l = Subst.find_var (x, l) s in
 
-            begin match Subst.find_type (x, l) s with
+            begin match Subst.find_type x s with
             | None ->
                 (* assume that there aren't any logic variables that could contain ground variables *)
                 `LVar (x, l)
@@ -927,11 +927,11 @@ module Type = struct
         | `LVar (x, l) ->
             if IS.mem x bvs then failwith "has_recursion: bound logic variable" ;
 
-            let x, l = Subst.find_var (x, l) s in
+            let x, _ = Subst.find_var (x, l) s in
 
             let old_path = !path in
 
-            if IS.mem x old_path then true else begin match Subst.find_type (x, l) s with
+            if IS.mem x old_path then true else begin match Subst.find_type x s with
             | None -> false
             | Some t ->
                 path := IS.add x old_path ;
@@ -1257,6 +1257,19 @@ module Type = struct
 
             s: Subst.t;
             r: c_aux list;
+
+            unification_handlers: unh list IM.t;
+        }
+
+        (* unification handler is a function that is called when logic variable
+         * is unified to add new constraints or change state
+         * they are used to track new constructors of S-exp types
+         * `finalize` must present final state, after that this handler may safely disappear
+         *)
+        and unh = {
+
+            on_unify: st -> c list * st;
+            finalize: st -> st;
         }
 
         type fail_form =
@@ -1276,37 +1289,6 @@ module Type = struct
 
     let simplify var_gen params_level level =
         let open Simpl in
-
-        let unify = unify var_gen in
-
-        (* shaps = SHallow APply Substitution *)
-        let rec shaps s = function
-        | `LVar (x, l) ->
-            let x, l = Subst.find_var (x, l) s in
-
-            begin match Subst.find_type (x, l) s with
-            | Some t -> shaps s t
-            | None -> `LVar (x, l)
-            end
-
-        | `Sexp (xs, row) ->
-            let rec shaps_sexp acc : int option -> sexp = function
-            | None -> acc, None
-            | Some row ->
-                let row = Subst.find_row_var row s in
-
-                match Subst.find_sexp row s with
-                | None -> acc, Some row
-                | Some (xs, row) ->
-                    let f _ _ _ = failwith "simplify: intersecting constructors in S-exp" in
-                    let xs = SexpConstructors.union f acc xs in
-                    shaps_sexp xs row
-            in
-
-            `Sexp (shaps_sexp xs row)
-
-        | t -> t
-        in
 
         let new_var () =
             let idx = !var_gen + 1 in
@@ -1426,11 +1408,52 @@ module Type = struct
             eqs @ ps, st
         in
 
+        let unify = unify var_gen in
+
+        (* shaps = SHallow APply Substitution *)
+        let rec shaps s = function
+        | `LVar (x, l) ->
+            let x, l = Subst.find_var (x, l) s in
+
+            begin match Subst.find_type x s with
+            | Some t -> shaps s t
+            | None -> `LVar (x, l)
+            end
+
+        | `Sexp (xs, row) ->
+            let rec shaps_sexp acc : int option -> sexp = function
+            | None -> acc, None
+            | Some row ->
+                let row = Subst.find_row_var row s in
+
+                match Subst.find_sexp row s with
+                | None -> acc, Some row
+                | Some (xs, row) ->
+                    let f _ _ _ = failwith "simplify: intersecting constructors in S-exp" in
+                    let xs = SexpConstructors.union f acc xs in
+                    shaps_sexp xs row
+            in
+
+            `Sexp (shaps_sexp xs row)
+
+        | t -> t
+        in
+
+        let add_unh x unh st =
+            let unhs = st.unification_handlers in
+
+            let unhs' = match IM.find_opt x unhs with Some unhs' -> unhs' | None -> [] in
+            let unhs' = unh :: unhs' in
+
+            let unhs = IM.add x unhs' unhs in
+            { st with unification_handlers = unhs }
+        in
+
         let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
             let handle_lvar l =
                 if l < level then
                     let s = (lift_lvars var_gen l)#c IS.empty c st.s in
-                    Some ([], { s ; r = (c, inf) :: st.r })
+                    Some ([], { st with s ; r = (c, inf) :: st.r })
 
                 else None
             in
@@ -1450,7 +1473,17 @@ module Type = struct
             | `Eq (t1, t2) -> begin try
                 let s = unify#t (t1, t2) st.s in
 
-                Some ([], { st with s })
+                let old_unh, unh = IM.partition (fun x _ -> Option.is_some @@ Subst.find_term x s)
+                    st.unification_handlers
+                in
+
+                let st = { st with s ; unification_handlers = unh } in
+
+                let f (cs, st) unh = let cs', st = unh.on_unify st in cs' @ cs, st in
+                let f _ unh acc = List.fold_left f acc unh in
+                let res = IM.fold f old_unh ([], st) in
+
+                Some res
 
                 with Unification_failure (s, t1, t2) ->
                     raise @@ Failure (Unification (t1, t2), c_aux, s)
@@ -1466,16 +1499,32 @@ module Type = struct
                     let xs = Seq.concat_map (fun (_, ts) -> List.to_seq ts) xs in
                     let xs = List.of_seq @@ Seq.map (fun t -> `Eq (t, t2)) xs in
 
-                    let c = match row with
-                    | None -> xs
-                    | Some row -> `Ind (`Sexp (SexpConstructors.empty, Some row), t2) :: xs
+                    let st = match row with
+                    | None -> st
+                    | Some row ->
+                        let on_unify ({ s ; _ } as st) =
+                            let (Some sexp) = Subst.find_sexp row s [@@warning "-8"] in
+                            [`Ind (`Sexp sexp, t2)], st
+                        in
+
+                        let finalize ({ s ; _ } as st) =
+                            (* TODO: looks bad *)
+
+                            let s =
+                                try Subst.bind_sexp row (SexpConstructors.empty, None) s
+                                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
+                                    if x1 <> x2 then failwith
+                                        @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
+
+                                    s
+                            in
+                                { st with s }
+                        in
+
+                        add_unh row { on_unify ; finalize } st
                     in
 
-                    (* if we have no ideas, how to progress on this constraint, return None *)
-                    begin match c with
-                    | [`Ind _] -> None
-                    | _ -> Some (c, st)
-                    end
+                    Some (xs, st)
 
                 | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
                 end
@@ -1550,13 +1599,33 @@ module Type = struct
                 begin match shaps st.s t with
                 | `LVar (_, l) -> handle_lvar l
 
-                (* TODO: just reassign Match on row variable? *)
-                | `Sexp (_, Some _) -> None
-                | `Sexp (xs, None) as t ->
+                | `Sexp (xs, row) as t ->
                     let f x ts (cs, st) =
                         let t' = `Sexp (SexpConstructors.singleton x ts, None) in
                         let cs', st = match_t_ast st t ps t' in
                         cs' :: cs, st
+                    in
+
+                    let st = match row with
+                    | None -> st
+                    | Some row ->
+                        let on_unify st = [`Match (t, ps)], st in
+
+                        let finalize ({ s ; _ } as st) =
+                            (* TODO: looks bad *)
+
+                            let s =
+                                try Subst.bind_sexp row (SexpConstructors.empty, None) s
+                                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
+                                    if x1 <> x2 then failwith
+                                        @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
+
+                                    s
+                            in
+                                { st with s }
+                        in
+
+                        add_unh row { on_unify ; finalize } st
                     in
 
                     begin try
@@ -1611,10 +1680,6 @@ module Type = struct
                         ; [t1, `Sexp (SexpConstructors.empty, Some row)]
                         ]
 
-                | `Sexp (xs, Some _) when SexpConstructors.is_empty xs && greedy > 2 ->
-                    (* greedy assumption that there are no more constructors *)
-                    gen [[t1, `Sexp (SexpConstructors.empty, None)]]
-
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
@@ -1624,17 +1689,7 @@ module Type = struct
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
-            | `Match (t, _) ->
-                begin match shaps st.s t with
-                | `Sexp (_, Some row) when greedy > 0 ->
-                    (* greedy assumption that there aren't more constructors in S-expression *)
-                    let t1 = `Sexp (SexpConstructors.empty, Some row) in
-                    let t2 = `Sexp (SexpConstructors.empty, None) in
-                    gen [[t1, t2]]
-
-                | _ -> Option.to_list @@ single_step_det st (c, inf)
-                end
-
+            | `Match _ -> Option.to_list @@ single_step_det st (c, inf)
             | `Sexp (_, t, _) ->
                 begin match shaps st.s t with
                 | `LVar (_, l) when l >= level ->
@@ -1716,13 +1771,28 @@ module Type = struct
             with Failure err -> full' inf (err :: errs) xs
         in
 
+        let finalize ({ unification_handlers ; _ } as st) =
+            let st = { st with unification_handlers = IM.empty } in
+
+            let f st unh = unh.finalize st in
+            let f _ unh st = List.fold_left f st unh in
+            let st = IM.fold f unification_handlers st in
+
+            if not @@ IM.is_empty st.unification_handlers then
+                failwith "BUG: unification handlers aren't disappear after finalize" ;
+
+            st
+        in
+
         object
 
             method full_deterministic = full_deterministic
             method full = full
 
-            method run : 'a. Subst.t -> (st -> 'a) -> 'a =
-                fun s f -> f { s = s ; r = [] }
+            method run : 'a. ?unification_handlers: Simpl.unh list IM.t -> Subst.t -> (st -> 'a) -> 'a =
+                fun ?(unification_handlers=IM.empty) s f -> f { s = s ; r = [] ; unification_handlers }
+
+            method finalize = finalize
         end
 
     (* type inferrer *)
@@ -1887,7 +1957,7 @@ module Type = struct
                 let (c, t'), s = infer_t ctx' b s in
                 let c = return (`Eq (t, t')) :: c in
 
-                let Simpl.{ s ; r = c } =
+                let Simpl.{ s ; r = c ; unification_handlers } =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx (level - 1) level in
                     simplify#run s @@ simplify#full c
@@ -1904,10 +1974,13 @@ module Type = struct
 
                 current_level := !current_level - 1 ;
 
-                let bc, Simpl.{ s ; r = fc } =
+                let bc, s, fc =
                     let level = !current_level in
                     let simplify = simplify prev_var_idx level level in
-                    simplify#run s @@ simplify#full_deterministic c
+                    let bc, st = simplify#run ~unification_handlers s @@ simplify#full_deterministic c in
+                    let Simpl.{ s ; r ; unification_handlers } = simplify#finalize st in
+                    let _ = unification_handlers in
+                    bc, s, r
                 in
 
                 (* now we have two kinds of residual constraints:

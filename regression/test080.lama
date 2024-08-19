@@ -1,4 +1,4 @@
-var x, y, z;
+var x;
 
 fun sum (x) {
   case x of
@@ -10,12 +10,5 @@ fun sum (x) {
 x := read ();
 
 write (sum (Nil));
-
-y := Nil ;
-y := Cons (100, y) ;
-write (sum (y));
-
-z := Nil ;
-z := Cons (200, z) ;
-z := Cons (100, z) ;
-write (sum (z))
+write (sum (Cons (100, Nil)));
+write (sum (Cons (100, Cons (200, Nil))))

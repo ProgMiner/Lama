@@ -258,7 +258,9 @@ let[@ocaml.warning "-32"] main =
                 T.Type.Subst.debug_print s ;
 
                 let simplify = infer#simplify 0 in
-                let T.Type.Simpl.{ s; r = c } = simplify#run s @@ simplify#full c in
+                let st = simplify#run s @@ simplify#full c in
+                let T.Type.Simpl.{ s; r = c ; unification_handlers } = simplify#finalize st in
+                let _ = unification_handlers in
 
                 (*
                 print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
