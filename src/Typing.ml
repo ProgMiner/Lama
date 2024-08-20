@@ -139,6 +139,8 @@ module Type = struct
     | `FunTag
     ]
 
+    (* TODO: add constraints Ind_i(T, T), Tuple(T, T, ..., T) *)
+
     and c = [
     | `Eq       of t * t            (* syntax equality *)
     | `Ind      of t * t            (* indexable *)
