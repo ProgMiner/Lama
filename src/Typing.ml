@@ -120,6 +120,7 @@ module Type = struct
     | `Array    of t                (* array *)
     | `Sexp     of sexp             (* S-expression *)
     | `Arrow    of IS.t * c list * t list * t (* arrow *)
+    | `Vararg   of t list * t       (* vararg function type *)
     | `Mu       of int * t          (* mu-type *)
     ]
 
@@ -173,6 +174,7 @@ module Type = struct
     | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall %s. (%s) => (%s) -> %s"
         (show_is xs) (show_list show_c c) (show_list show_t ts) (show_t t)
 
+    | `Vararg (ts, t) -> Printf.sprintf "(%s, ...) -> %s" (show_list show_t ts) (show_t t)
     | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
     and show_sexp ((xs, row) : sexp) =
@@ -236,6 +238,13 @@ module Type = struct
 
     | `Arrow _, _ -> -1
     | _, `Arrow _ -> 1
+    | `Vararg (ts1, t1), `Vararg (ts2, t2) ->
+        lex_compare [ (fun () -> List.compare compare_t ts1 ts2)
+                    ; (fun () -> compare_t t1 t2)
+                    ]
+
+    | `Vararg _, _ -> -1
+    | _, `Vararg _ -> 1
     | `Mu (x1, t1), `Mu (x2, t2) ->
         lex_compare [ (fun () -> Int.compare x1 x2)
                     ; (fun () -> compare_t t1 t2)
@@ -406,9 +415,8 @@ module Type = struct
         | `String -> `String
         | `Array t -> `Array (subst_t t)
         | `Sexp xs -> `Sexp (subst_sexp xs)
-        | `Arrow (xs, c, ts, t) ->
-            `Arrow (xs, List.map subst_c c, List.map subst_t ts, subst_t t)
-
+        | `Arrow (xs, c, ts, t) -> `Arrow (xs, List.map subst_c c, List.map subst_t ts, subst_t t)
+        | `Vararg (ts, t) -> `Vararg (List.map subst_t ts, subst_t t)
         | `Mu (x, t) -> `Mu (x, subst_t t)
 
         and subst_sexp (xs, row) =
@@ -507,6 +515,7 @@ module Type = struct
                 let s = lift_t bvs t s in
                 s
 
+        | `Vararg (ts, t) -> fun s -> lift_t bvs t @@ List.fold_left (Fun.flip @@ lift_t bvs) s ts
         | `Mu (x, t) -> lift_t (IS.add x bvs) t
 
         and lift_sexp bvs (xs, row : sexp) : Mut.t = fun s ->
@@ -617,6 +626,11 @@ module Type = struct
             let ts, s = map_m (ltog_t bvs) s ts in
             let t, s = ltog_t bvs s t in
             `Arrow (xs, c, ts, t), s
+
+        | `Vararg (ts, t) ->
+            let ts, s = map_m (ltog_t bvs) s ts in
+            let t, s = ltog_t bvs s t in
+            `Vararg (ts, t), s
 
         | `Mu (x, t) -> let t, s = ltog_t (IS.add x bvs) s t in `Mu (x, t), s
 
@@ -809,6 +823,7 @@ module Type = struct
             let bvs = IS.union bvs xs in
             `Arrow (xs, List.map (gtol_c bvs) c, List.map (gtol_t bvs) ts, gtol_t bvs t)
 
+        | `Vararg (ts, t) -> `Vararg (List.map (gtol_t bvs) ts, gtol_t bvs t)
         | `Mu (x, t) -> `Mu (x, gtol_t (IS.add x bvs) t)
 
         and gtol_sexp bvs (xs, row : sexp) : sexp =
@@ -951,6 +966,7 @@ module Type = struct
             let bvs = IS.union bvs xs in
             List.exists (is_rec_c bvs) c || List.exists (is_rec_t bvs) ts || is_rec_t bvs t
 
+        | `Vararg (ts, t) -> List.exists (is_rec_t bvs) ts || is_rec_t bvs t
         | `Mu (x, t) -> is_rec_t (IS.add x bvs) t
 
         and is_rec_sexp bvs ((xs, row) : sexp) : bool =
@@ -1026,6 +1042,11 @@ module Type = struct
             let ts, s = map_m (remu_t bvs) s ts in
             let t, s = remu_t bvs s t in
             `Arrow (xs, c, ts, t), s
+
+        | `Vararg (ts, t) ->
+            let ts, s = map_m (remu_t bvs) s ts in
+            let t, s = remu_t bvs s t in
+            `Vararg (ts, t), s
 
         | `Mu (x, t) ->
             if IS.mem x !cache then `LVar (x, level), s else begin
@@ -1189,7 +1210,7 @@ module Type = struct
 
         | `Arrow (xs1, c1, ts1, t1) as ft1, (`Arrow (xs2, c2, ts2, t2) as ft2) ->
             if IS.cardinal xs1 <> IS.cardinal xs2 || List.length c1 <> List.length c2
-                || (xs1 <> xs2 && not (IS.disjoint xs1 xs2))
+                || List.length ts1 <> List.length ts2 || (xs1 <> xs2 && not (IS.disjoint xs1 xs2))
             then
                 fun s -> raise @@ Unification_failure (s, ft1, ft2)
 
@@ -1211,6 +1232,15 @@ module Type = struct
                     let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
                     let s = unify_t ctx (t1, t2) s in
                     s
+
+        | `Vararg (ts1, t1), `Vararg (ts2, t2) -> fun s ->
+            let s = unify_t ctx (t1, t2) s in
+
+            let ts'l = Int.min (List.length ts1) (List.length ts2) in
+            let ts1 = List.of_seq @@ Seq.take ts'l @@ List.to_seq ts1 in
+            let ts2 = List.of_seq @@ Seq.take ts'l @@ List.to_seq ts2 in
+
+            List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2
 
         | `Mu (x1, t1), `Mu (x2, t2) ->
             if x1 = x2 then unify_t ctx (t1, t2) else
@@ -1411,6 +1441,7 @@ module Type = struct
             Some ([], List.map (fun t -> t, `Wildcard) ts)
 
         | `Wildcard, `Arrow _ -> Some ([], [])
+        | `Wildcard, `Vararg _ -> Some ([], [])
         | `Typed (t', p), t -> Option.map (fun (eqs, ps) -> t' :: eqs, ps) @@ match_t (p, t)
         | `Array ps, `Array t -> Some ([], List.map (fun p -> t, p) ps)
         | `Sexp (x, ps), `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
@@ -1424,6 +1455,7 @@ module Type = struct
             Some ([], List.map (fun t -> t, `Wildcard) ts)
 
         | `Boxed, `Arrow _ -> Some ([], [])
+        | `Boxed, `Vararg _ -> Some ([], [])
         | `Unboxed, `Int -> Some ([], [])
         | `StringTag, `String -> Some ([], [])
         | `ArrayTag, `Array t -> Some ([], [t, `Wildcard])
@@ -1432,6 +1464,7 @@ module Type = struct
             Some ([], List.map (fun t -> t, `Wildcard) ts)
 
         | `FunTag, `Arrow _ -> Some ([], [])
+        | `FunTag, `Vararg _ -> Some ([], [])
         | _, `GVar _ -> failwith "match_t: ground variable"
         | _, `LVar _ -> failwith "match_t: logic variable"
         | _, `Sexp (xs, _) when SexpConstructors.cardinal xs <> 1 ->
@@ -1692,6 +1725,25 @@ module Type = struct
                     let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
                     let c = `Eq (ft, t) :: c in
                     let c = fc @ c in
+
+                    Some (c, st)
+
+                | `Vararg (fts, ft) as ft' ->
+                    begin
+                        let args_num = List.length ts in
+                        if args_num < List.length fts then
+                            raise @@ Failure (WrongArgsNum (ft', args_num), c_aux, st.s)
+                    end ;
+
+                    let c =
+                        let ts'l = Int.min (List.length fts) (List.length ts) in
+
+                        (* `List.length ts` must be >= `List.length fts` *)
+                        let ts = List.of_seq @@ Seq.take ts'l @@ List.to_seq ts in
+                        List.map2 (fun ft t -> `Eq (ft, t)) fts ts
+                    in
+
+                    let c = `Eq (ft, t) :: c in
 
                     Some (c, st)
 
@@ -2231,6 +2283,7 @@ module Type = struct
             let bvs = IS.union bvs xs in
             `Arrow (xs, List.map (mono_c bvs) c, List.map (mono_t bvs) ts, mono_t bvs t)
 
+        | `Vararg (ts, t) -> `Vararg (List.map (mono_t bvs) ts, mono_t bvs t)
         | `Mu (x, t) -> `Mu (x, mono_t (IS.add x bvs) t)
 
         and mono_sexp bvs ((xs, _) : sexp) : sexp =
@@ -2304,6 +2357,12 @@ module Interface = struct
             append ") -> " ;
             append_t t
 
+        | `Vararg (ts, t) ->
+            append "(" ;
+            append_list ~suffix:", " append_t ts ;
+            append "...) -> " ;
+            append_t t
+
         | `Mu (x, t) ->
             append "mu " ;
             append_i x ;
@@ -2363,7 +2422,7 @@ module Interface = struct
 
         let ostap (
             decl   : i:IDENT ":" t:typ ";" { (i, t) } ;
-            typ    : tVar | tInt | tString | tArray | tSexp | tArrow | tMu ;
+            typ    : tVar | tInt | tString | tArray | tSexp | tArrow | tVararg | tMu ;
             tVar   : v:DECIMAL { on_var v ; `GVar v } ;
             tInt   : "Int" { `Int } ;
             tString: "String" { `String } ;
@@ -2384,6 +2443,8 @@ module Interface = struct
                 List.iter on_var xs ;
                 `Arrow (Type.IS.of_seq @@ List.to_seq xs, c, ts, t)
             } ;
+            tVararg: "(" ts:(!(Util.list)[typ] -"," | (!(Combinators.empty)) { [] }) -"..." ")"
+                     "->" t:typ { `Vararg (ts, t) } ;
             tMu    : "mu" x:DECIMAL "." t:typ { on_var x ; `Mu (x, t) } ;
             pat    : pWildcard | pTyped | pArray | pSexp | pBoxed | pUnboxed
                    | pStringTag | pArrayTag | pSexpTag | pFunTag ;
