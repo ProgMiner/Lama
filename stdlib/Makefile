@@ -22,9 +22,9 @@ STM.o: List.o Fun.o
 
 %.o: %.lama
 	LAMA=../runtime $(LAMAC) -I . -c $<
-	LAMA=../runtime $(LAMAC) -I . -t $<
+	-LAMA=../runtime $(LAMAC) -I . -t $<
 
 clean:
-	rm -Rf *.s *.o *.i *~
+	rm -Rf *.s *.o *.i *.ti *~
 	pushd regression && make clean && popd
 

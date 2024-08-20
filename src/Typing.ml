@@ -990,6 +990,111 @@ module Type = struct
             method c = is_rec_c
         end
 
+    let refresh_mu level =
+        let cache = Stdlib.ref IS.empty in
+
+        let map_m f s xs =
+            let f (xs, s) x = let x, s = f s x in (x :: xs, s) in
+            let xs, s = List.fold_left f ([], s) xs in
+            List.rev xs, s
+        in
+
+        let map_m_sexp f s xs =
+            let f k x (xs, s) = let x, s = f s x in (SexpConstructors.add k x xs, s) in
+            SexpConstructors.fold f xs (SexpConstructors.empty, s)
+        in
+
+        let rec remu_t bvs s : t -> t * Subst.t = function
+        | `GVar x ->
+            if not @@ IS.mem x bvs then failwith "refresh_mu: free ground variable" ;
+
+            if IS.mem x !cache
+            then `LVar (x, level), s
+            else `GVar x, s
+
+        | `LVar (x, _) as t ->
+            if IS.mem x bvs then failwith "lift_lvars: bound logic variable" ;
+            t, s
+
+        | `Int -> `Int, s
+        | `String -> `String, s
+        | `Array t -> let t, s = remu_t bvs s t in `Array t, s
+        | `Sexp xs -> let xs, s = remu_sexp bvs s xs in `Sexp xs, s
+        | `Arrow (xs, c, ts, t) ->
+            let bvs = IS.union bvs xs in
+            let c, s = map_m (remu_c bvs) s c in
+            let ts, s = map_m (remu_t bvs) s ts in
+            let t, s = remu_t bvs s t in
+            `Arrow (xs, c, ts, t), s
+
+        | `Mu (x, t) ->
+            if IS.mem x !cache then `LVar (x, level), s else begin
+                cache := IS.add x !cache ;
+
+                let t, s = remu_t (IS.add x bvs) s t in
+                let s = Subst.bind_type (x, level) t s in
+
+                `LVar (x, level), s
+            end
+
+        and remu_sexp bvs s (xs, row : sexp) : sexp * Subst.t =
+            if row <> None then failwith "BUG: row variables aren't supported" ;
+
+            let xs, s = map_m_sexp (map_m @@ remu_t bvs) s xs in
+            (xs, row), s
+
+        and remu_p bvs s : p -> p * Subst.t = function
+        | `Wildcard -> `Wildcard, s
+        | `Typed (t, p) ->
+            let t, s = remu_t bvs s t in
+            let p, s = remu_p bvs s p in
+            `Typed (t, p), s
+
+        | `Array ps -> let ps, s = map_m (remu_p bvs) s ps in `Array ps, s
+        | `Sexp (x, ps) -> let ps, s = map_m (remu_p bvs) s ps in `Sexp (x, ps), s
+        | `Boxed -> `Boxed, s
+        | `Unboxed -> `Unboxed, s
+        | `StringTag -> `StringTag, s
+        | `ArrayTag -> `ArrayTag, s
+        | `SexpTag -> `SexpTag, s
+        | `FunTag -> `FunTag, s
+
+        and remu_c bvs s : c -> c * Subst.t = function
+        | `Eq (t1, t2) ->
+            let t1, s = remu_t bvs s t1 in
+            let t2, s = remu_t bvs s t2 in
+            `Eq (t1, t2), s
+
+        | `Ind (t1, t2) ->
+            let t1, s = remu_t bvs s t1 in
+            let t2, s = remu_t bvs s t2 in
+            `Ind (t1, t2), s
+
+        | `Call (t, ts, t') ->
+            let t, s = remu_t bvs s t in
+            let ts, s = map_m (remu_t bvs) s ts in
+            let t', s = remu_t bvs s t' in
+            `Call (t, ts, t'), s
+
+        | `Match (t, ps) ->
+            let t, s = remu_t bvs s t in
+            let ps, s = map_m (remu_p bvs) s ps in
+            `Match (t, ps), s
+
+        | `Sexp (x, t, ts) ->
+            let t, s = remu_t bvs s t in
+            let ts, s = map_m (remu_t bvs) s ts in
+            `Sexp (x, t, ts), s
+        in
+
+        object
+
+            method t = remu_t
+            method sexp = remu_sexp
+            method p = remu_p
+            method c = remu_c
+        end
+
     (* unification, returns substitution and residual equations *)
 
     exception Unification_failure of Subst.t * t * t
@@ -2307,7 +2412,7 @@ module Interface = struct
 
             begin match Util.parse (object
                 inherit Matcher.t s
-                inherit Util.Lexers.ident [] s
+                inherit Util.Lexers.ident ["Int"; "String"; "forall"; "mu"] s
                 inherit Util.Lexers.decimal s
                 inherit Util.Lexers.skip  [Matcher.Skip.whitespaces " \t\n"] s
             end) (ostap (interface -EOF)) with

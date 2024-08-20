@@ -214,12 +214,22 @@ let[@ocaml.warning "-32"] main =
                 List.fold_left f T.Type.Context.empty ctx
             in
 
-            Printf.printf "Max variable: %d\n" !max_var ;
+            let ctx, s =
+                let remu = T.Type.refresh_mu 0 in
+
+                let s = Stdlib.ref T.Type.Subst.empty in
+                let f t = let t, s' = remu#t T.Type.IS.empty !s t in s := s' ; t in
+                let ctx = T.Type.Context.map f ctx in
+                ctx, !s
+            in
+
+            print_endline "Source substitution:" ;
+            T.Type.Subst.debug_print s ;
 
             print_endline "Context:" ;
             T.Type.Context.iter (fun x t -> Printf.printf "%s : %s\n" x (T.Type.show_t t)) ctx ;
 
-            (* TODO: unfold recursive types in loaded context *)
+            Printf.printf "Max variable: %d\n" !max_var ;
 
             let print_decls decls =
                 let rec f indent (x, t, inner) =
@@ -242,7 +252,7 @@ let[@ocaml.warning "-32"] main =
 
             begin try
                 let infer = T.Type.infer !max_var in
-                let (c, _), s = infer#term ctx prog' T.Type.Subst.empty in
+                let (c, _), s = infer#term ctx prog' s in
                 let decls = infer#all_decls () in
 
                 print_endline "Inferred constraints:" ;
@@ -252,7 +262,7 @@ let[@ocaml.warning "-32"] main =
                 print_endline "Inferred types:" ;
                 print_decls decls ;
 
-                print_endline "Source substitution:" ;
+                print_endline "Intermediate substitution:" ;
                 T.Type.Subst.debug_print s ;
 
                 let simplify = infer#simplify 0 in
