@@ -350,6 +350,10 @@ let[@ocaml.warning "-32"] main =
                         let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "wrong number of arguments (given %d) in call: %s\n" n t ;
 
+                    | IndexOutOfBounds (t, i) ->
+                        let t = T.Type.show_t @@ apply_subst#t t in
+                        Printf.printf "index %d is out of bounds: %s\n" i t ;
+
                     | NotSupported ->
                         let c = T.Type.show_c @@ apply_subst#c c in
                         Printf.printf "constraint solving is not supported: %s\n" c ;

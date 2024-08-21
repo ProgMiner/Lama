@@ -139,11 +139,12 @@ module Type = struct
     | `FunTag
     ]
 
-    (* TODO: add constraints Ind_i(T, T), Tuple(T, T, ..., T) *)
+    (* TODO: add constraint Tuple(T, T, ..., T) *)
 
     and c = [
     | `Eq       of t * t            (* syntax equality *)
     | `Ind      of t * t            (* indexable *)
+    | `IndI     of int * t * t      (* Ind with constant index *)
     | `Call     of t * t list * t   (* callable with args and result types *)
     | `Match    of t * p list       (* match type with patterns *)
     | `Sexp     of string * t * t list (* type is S-expression *)
@@ -202,6 +203,7 @@ module Type = struct
     and show_c : c -> _ = function
     | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
+    | `IndI (i, l, r) -> Printf.sprintf "Ind_%d(%s, %s)" i (show_t l) (show_t r)
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s)" (show_list show_t @@ t :: ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
@@ -317,6 +319,14 @@ module Type = struct
 
     | `Ind _, _ -> -1
     | _, `Ind _ -> 1
+    | `IndI (i1, l1, r1), `IndI (i2, l2, r2) ->
+        lex_compare [ (fun () -> Int.compare i1 i2)
+                    ; (fun () -> compare_t l1 l2)
+                    ; (fun () -> compare_t r1 r2)
+                    ]
+
+    | `IndI _, _ -> -1
+    | _, `IndI _ -> 1
     | `Call (t1, ts1, s1), `Call (t2, ts2, s2) ->
         lex_compare [ (fun () -> compare_t t1 t2)
                     ; (fun () -> List.compare compare_t ts1 ts2)
@@ -451,6 +461,7 @@ module Type = struct
         and subst_c : c -> c = function
         | `Eq (t1, t2) -> `Eq (subst_t t1, subst_t t2)
         | `Ind (t1, t2) -> `Ind (subst_t t1, subst_t t2)
+        | `IndI (i, t1, t2) -> `IndI (i, subst_t t1, subst_t t2)
         | `Call (t, ts, t') -> `Call (subst_t t, List.map subst_t ts, subst_t t')
         | `Match (t, ps) -> `Match (subst_t t, List.map subst_p ps)
         | `Sexp (x, t, ts) -> `Sexp (x, subst_t t, List.map subst_t ts)
@@ -545,6 +556,7 @@ module Type = struct
         and lift_c bvs : c -> Mut.t = function
         | `Eq (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
         | `Ind (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
+        | `IndI (_, t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
         | `Call (t, ts, t') -> fun s ->
             let s = lift_t bvs t s in
             let s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
@@ -681,6 +693,11 @@ module Type = struct
             let t1, s = ltog_t bvs s t1 in
             let t2, s = ltog_t bvs s t2 in
             `Ind (t1, t2), s
+
+        | `IndI (i, t1, t2) ->
+            let t1, s = ltog_t bvs s t1 in
+            let t2, s = ltog_t bvs s t2 in
+            `IndI (i, t1, t2), s
 
         | `Call (t, ts, t') ->
             let t, s = ltog_t bvs s t in
@@ -886,6 +903,7 @@ module Type = struct
         and gtol_c bvs : c -> c = function
         | `Eq (t1, t2) -> `Eq (gtol_t bvs t1, gtol_t bvs t2)
         | `Ind (t1, t2) -> `Ind (gtol_t bvs t1, gtol_t bvs t2)
+        | `IndI (i, t1, t2) -> `IndI (i, gtol_t bvs t1, gtol_t bvs t2)
         | `Call (t, ts, t') -> `Call (gtol_t bvs t, List.map (gtol_t bvs) ts, gtol_t bvs t')
         | `Match (t, ps) -> `Match (gtol_t bvs t, List.map (gtol_p bvs) ps)
         | `Sexp (x, t, ts) -> `Sexp (x, gtol_t bvs t, List.map (gtol_t bvs) ts)
@@ -995,6 +1013,7 @@ module Type = struct
         and is_rec_c bvs : c -> bool = function
         | `Eq (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
         | `Ind (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
+        | `IndI (_, t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
         | `Call (t, ts, t') -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts || is_rec_t bvs t'
         | `Match (t, ps) -> is_rec_t bvs t || List.exists (is_rec_p bvs) ps
         | `Sexp (_, t, ts) -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts
@@ -1092,6 +1111,11 @@ module Type = struct
             let t1, s = remu_t bvs s t1 in
             let t2, s = remu_t bvs s t2 in
             `Ind (t1, t2), s
+
+        | `IndI (i, t1, t2) ->
+            let t1, s = remu_t bvs s t1 in
+            let t2, s = remu_t bvs s t2 in
+            `IndI (i, t1, t2), s
 
         | `Call (t, ts, t') ->
             let t, s = remu_t bvs s t in
@@ -1359,6 +1383,11 @@ module Type = struct
             let s = unify_t ctx (r1, r2) s in
             s
 
+        | `IndI (i1, l1, r1), `IndI (i2, l2, r2) when i1 = i2 -> fun s ->
+            let s = unify_t ctx (l1, l2) s in
+            let s = unify_t ctx (r1, r2) s in
+            s
+
         | `Call (ft1, ts1, t1), `Call (ft2, ts2, t2)
         when List.length ts1 = List.length ts2 -> fun s ->
             let s = unify_t ctx (ft1, ft2) s in
@@ -1417,6 +1446,7 @@ module Type = struct
         | NotMatchable of t * p list
         | NotSexp of t
         | WrongArgsNum of t * int
+        | IndexOutOfBounds of t * int
         | NotSupported
 
         and fail = fail_form * c_aux * Subst.t
@@ -1589,6 +1619,21 @@ module Type = struct
             { st with unification_handlers = unhs }
         in
 
+        let finalize_force_empty_row row ({ s ; _ } as st) =
+            (* TODO: looks bad *)
+
+            let s =
+                try Subst.bind_sexp row (SexpConstructors.empty, None) s
+                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
+                    if x1 <> x2 then
+                        failwith @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
+
+                    s
+            in
+
+            { st with s }
+        in
+
         let single_step_det st (c, inf as c_aux : c_aux) : (c list * st) option =
             let handle_lvar l =
                 if l < level then
@@ -1647,19 +1692,7 @@ module Type = struct
                             [`Ind (`Sexp sexp, t2)], st
                         in
 
-                        let finalize ({ s ; _ } as st) =
-                            (* TODO: looks bad *)
-
-                            let s =
-                                try Subst.bind_sexp row (SexpConstructors.empty, None) s
-                                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
-                                    if x1 <> x2 then failwith
-                                        @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
-
-                                    s
-                            in
-                                { st with s }
-                        in
+                        let finalize = finalize_force_empty_row row in
 
                         add_unh row { on_unify ; finalize } st
                     in
@@ -1667,6 +1700,36 @@ module Type = struct
                     Some (xs, st)
 
                 | _ -> raise @@ Failure (NotIndexable t1, c_aux, st.s)
+                end
+
+            | `IndI (i, t1, t2) ->
+                begin match shaps st.s t1 with
+                | `LVar (_, l) -> handle_lvar l
+                | `Sexp (xs, row) ->
+                    let f ts = match List.nth_opt ts i with
+                    | None -> raise @@ Failure (IndexOutOfBounds (t1, i), c_aux, st.s)
+                    | Some t -> `Eq (t, t2)
+                    in
+
+                    let xs = SexpConstructors.to_seq xs in
+                    let xs = List.of_seq @@ Seq.map (fun (_, ts) -> f ts) xs in
+
+                    let st = match row with
+                    | None -> st
+                    | Some row ->
+                        let on_unify ({ s ; _ } as st) =
+                            let [@warning "-8"] (Some sexp) = Subst.find_sexp row s in
+                            [`IndI (i, `Sexp sexp, t2)], st
+                        in
+
+                        let finalize = finalize_force_empty_row row in
+
+                        add_unh row { on_unify ; finalize } st
+                    in
+
+                    Some (xs, st)
+
+                | _ -> Some ([`Ind (t1, t2)], st)
                 end
 
             | `Call (ft, ts, t) ->
@@ -1769,20 +1832,7 @@ module Type = struct
                     | None -> st
                     | Some row ->
                         let on_unify st = [`Match (t, ps)], st in
-
-                        let finalize ({ s ; _ } as st) =
-                            (* TODO: looks bad *)
-
-                            let s =
-                                try Subst.bind_sexp row (SexpConstructors.empty, None) s
-                                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
-                                    if x1 <> x2 then failwith
-                                        @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
-
-                                    s
-                            in
-                                { st with s }
-                        in
+                        let finalize = finalize_force_empty_row row in
 
                         add_unh row { on_unify ; finalize } st
                     in
@@ -1829,7 +1879,7 @@ module Type = struct
             in
 
             match c with
-            | `Ind (t1, t2) ->
+            | `Ind (t1, t2) | `IndI (_, t1, t2) ->
                 begin match shaps st.s t1 with
                 | `LVar (_, l) when l >= level ->
                     let row = new_var () in
@@ -2090,6 +2140,12 @@ module Type = struct
                 let t' = new_tv () in
                 St.return (return (`Call (t, List.map snd cts, t')) :: c, t')
 
+            | E.Subscript (x, (E.Int i, _)) ->
+                let* c, t' = infer_t ctx x in
+
+                let t = new_tv () in
+                St.return (return (`IndI (i, t', t)) :: c, t)
+
             | E.Subscript (x, i) ->
                 let* c1, t1 = infer_t ctx x in
                 let* c2, t2 = infer_t ctx i in
@@ -2306,6 +2362,7 @@ module Type = struct
         and mono_c bvs : c -> c = function
         | `Eq (t1, t2) -> `Eq (mono_t bvs t1, mono_t bvs t2)
         | `Ind (t1, t2) -> `Ind (mono_t bvs t1, mono_t bvs t2)
+        | `IndI (i, t1, t2) -> `IndI (i, mono_t bvs t1, mono_t bvs t2)
         | `Call (t, ts, t') -> `Call (mono_t bvs t, List.map (mono_t bvs) ts, mono_t bvs t')
         | `Match (t, ps) -> `Match (mono_t bvs t, List.map (mono_p bvs) ps)
         | `Sexp (x, t, ts) -> `Sexp (x, mono_t bvs t, List.map (mono_t bvs) ts)
@@ -2392,6 +2449,15 @@ module Interface = struct
         and append_c = function
         | `Eq _ -> failwith "BUG: Eq constraint in typed interface"
         | `Ind (t1, t2) -> append "Ind (" ; append_t t1 ; append ", " ; append_t t2 ; append ")"
+        | `IndI (i, t1, t2) ->
+            append "IndI (" ;
+            append_i i ;
+            append ", " ;
+            append_t t1 ;
+            append ", " ;
+            append_t t2 ;
+            append ")"
+
         | `Call (ft, ts, t) ->
             append "Call (" ;
             append_t ft ;
@@ -2462,8 +2528,9 @@ module Interface = struct
             pArrayTag: "#array" { `ArrayTag } ;
             pSexpTag: "#sexp" { `SexpTag } ;
             pFunTag: "#fun" { `FunTag } ;
-            cnstr  : cInd | cCall | cMatch | cSexp ;
+            cnstr  : cInd | cIndI | cCall | cMatch | cSexp ;
             cInd   : "Ind" "(" t1:typ "," t2:typ ")" { `Ind (t1, t2) } ;
+            cIndI  : "IndI" "(" i:DECIMAL "," t1:typ "," t2:typ ")" { `IndI (i, t1, t2) } ;
             cCall  : "Call" "(" ft:typ "," ts:(typ -",")* t:typ ")" { `Call (ft, ts, t) } ;
             cMatch : "Match" "(" t:typ ps:(-"," pat)* ")" { `Match (t, ps) } ;
             cSexp  : "Sexp" "(" x:IDENT "," t:typ ts:(-"," typ)* ")" { `Sexp (x, t, ts) } ;
