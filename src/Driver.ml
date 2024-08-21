@@ -346,6 +346,10 @@ let[@ocaml.warning "-32"] main =
                         let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "type is not S-expression type: %s\n" t ;
 
+                    | NotTuple t ->
+                        let t = T.Type.show_t @@ apply_subst#t t in
+                        Printf.printf "type is not tuple-like: %s\n" t ;
+
                     | WrongArgsNum (t, n) ->
                         let t = T.Type.show_t @@ apply_subst#t t in
                         Printf.printf "wrong number of arguments (given %d) in call: %s\n" n t ;

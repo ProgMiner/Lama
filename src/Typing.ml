@@ -25,7 +25,7 @@ module Expr = struct
     | Scope     of decl list * expr     (* scope expression *)
     | Seq       of expr * expr          (* sequence point *)
     | Assign    of expr * expr          (* assignment *)
-    | Binop     of expr * expr          (* binary operator *)
+    | Binop     of expr * expr * bool   (* binary operator, flag means "is equality" *)
     | Call      of expr * expr list     (* call *)
     | Subscript of expr * expr          (* subscript *)
     | Name      of string               (* variable name *)
@@ -64,7 +64,10 @@ module Expr = struct
         | L.Sexp (x, xs) -> return @@ Sexp (x, List.map (from_language name) xs)
         | L.Var x -> return @@ Name x
         | L.Ref x -> return @@ Name x
-        | L.Binop (_, l, r) -> return @@ Binop (from_language name l, from_language name r)
+        | L.Binop (op, l, r) ->
+            let is_eq = op = "==" || op = "!=" in
+            return @@ Binop (from_language name l, from_language name r, is_eq)
+
         | L.Elem (xs, i) -> return @@ Subscript (from_language name xs, from_language name i)
         | L.ElemRef (xs, i) -> return @@ Subscript (from_language name xs, from_language name i)
         | L.Call (f, xs) -> return @@ Call (from_language name f, List.map (from_language name) xs)
@@ -139,8 +142,6 @@ module Type = struct
     | `FunTag
     ]
 
-    (* TODO: add constraint Tuple(T, T, ..., T) *)
-
     and c = [
     | `Eq       of t * t            (* syntax equality *)
     | `Ind      of t * t            (* indexable *)
@@ -148,6 +149,7 @@ module Type = struct
     | `Call     of t * t list * t   (* callable with args and result types *)
     | `Match    of t * p list       (* match type with patterns *)
     | `Sexp     of string * t * t list (* type is S-expression *)
+    | `Tuple    of t * t list       (* type is tuple-like *)
     ]
 
     type c_info = {
@@ -207,6 +209,7 @@ module Type = struct
     | `Call (t, ts, s) -> Printf.sprintf "Call(%s, %s)" (show_list show_t @@ t :: ts) (show_t s)
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
+    | `Tuple (t, ts) -> Printf.sprintf "Tuple(%s)" (show_list show_t @@ t :: ts)
 
     let rec lex_compare = function
     | [] -> 0
@@ -350,6 +353,13 @@ module Type = struct
 
     | `Sexp _, _ -> -1
     | _, `Sexp _ -> 1
+    | `Tuple (t1, ts1), `Tuple (t2, ts2) ->
+        lex_compare [ (fun () -> compare_t t1 t2)
+                    ; (fun () -> List.compare compare_t ts1 ts2)
+                    ]
+
+    | `Tuple _, _ -> -1
+    | _, `Tuple _ -> 1
     [@@warning "-11"]
 
     (* substitution *)
@@ -465,6 +475,7 @@ module Type = struct
         | `Call (t, ts, t') -> `Call (subst_t t, List.map subst_t ts, subst_t t')
         | `Match (t, ps) -> `Match (subst_t t, List.map subst_p ps)
         | `Sexp (x, t, ts) -> `Sexp (x, subst_t t, List.map subst_t ts)
+        | `Tuple (t, ts) -> `Tuple (subst_t t, List.map subst_t ts)
         in
 
         object
@@ -565,6 +576,7 @@ module Type = struct
 
         | `Match (t, ps) -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) (lift_t bvs t s) ps
         | `Sexp (_, t, ts) -> fun s -> List.fold_left (Fun.flip @@ lift_t bvs) (lift_t bvs t s) ts
+        | `Tuple (t, ts) -> fun s -> List.fold_left (Fun.flip @@ lift_t bvs) (lift_t bvs t s) ts
         in
 
         object
@@ -714,6 +726,11 @@ module Type = struct
             let t, s = ltog_t bvs s t in
             let ts, s = map_m (ltog_t bvs) s ts in
             `Sexp (x, t, ts), s
+
+        | `Tuple (t, ts) ->
+            let t, s = ltog_t bvs s t in
+            let ts, s = map_m (ltog_t bvs) s ts in
+            `Tuple (t, ts), s
         in
 
         object
@@ -907,6 +924,7 @@ module Type = struct
         | `Call (t, ts, t') -> `Call (gtol_t bvs t, List.map (gtol_t bvs) ts, gtol_t bvs t')
         | `Match (t, ps) -> `Match (gtol_t bvs t, List.map (gtol_p bvs) ps)
         | `Sexp (x, t, ts) -> `Sexp (x, gtol_t bvs t, List.map (gtol_t bvs) ts)
+        | `Tuple (t, ts) -> `Tuple (gtol_t bvs t, List.map (gtol_t bvs) ts)
         in
 
         let finalize () =
@@ -1017,6 +1035,7 @@ module Type = struct
         | `Call (t, ts, t') -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts || is_rec_t bvs t'
         | `Match (t, ps) -> is_rec_t bvs t || List.exists (is_rec_p bvs) ps
         | `Sexp (_, t, ts) -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts
+        | `Tuple (t, ts) -> is_rec_t bvs t || List.exists (is_rec_t bvs) ts
         in
 
         object
@@ -1132,6 +1151,11 @@ module Type = struct
             let t, s = remu_t bvs s t in
             let ts, s = map_m (remu_t bvs) s ts in
             `Sexp (x, t, ts), s
+
+        | `Tuple (t, ts) ->
+            let t, s = remu_t bvs s t in
+            let ts, s = map_m (remu_t bvs) s ts in
+            `Tuple (t, ts), s
         in
 
         object
@@ -1166,6 +1190,8 @@ module Type = struct
 
             type t = Subst.t -> Subst.t
         end in
+
+        (* TODO: how to deal with fully-defined and equivalent recursive types??? *)
 
         let rec unify_t (ctx : VMap.t) : t * t -> Mut.t = function
 
@@ -1312,7 +1338,6 @@ module Type = struct
             end else begin
                 let module SLS = Set.Make(SexpLabel) in
 
-                let fst (l, _) = l in
                 let xs1'labels = SLS.of_seq @@ Seq.map fst @@ SexpConstructors.to_seq xs1 in
                 let xs2'labels = SLS.of_seq @@ Seq.map fst @@ SexpConstructors.to_seq xs2 in
 
@@ -1406,6 +1431,11 @@ module Type = struct
             let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
             s
 
+        | `Tuple (t1, ts1), `Tuple (t2, ts2) when List.length ts1 = List.length ts2 -> fun s ->
+            let s = unify_t ctx (t1, t2) s in
+            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
+            s
+
         | _, _ -> fun s -> raise @@ Custom_unification_failure s
         in
 
@@ -1445,6 +1475,7 @@ module Type = struct
         | NotCallable of t
         | NotMatchable of t * p list
         | NotSexp of t
+        | NotTuple of t
         | WrongArgsNum of t * int
         | IndexOutOfBounds of t * int
         | NotSupported
@@ -1452,6 +1483,8 @@ module Type = struct
         and fail = fail_form * c_aux * Subst.t
 
         exception Failure of fail
+
+        let tuple_label = "tuple"
     end
 
     let simplify var_gen params_level level =
@@ -1476,6 +1509,10 @@ module Type = struct
         | `Wildcard, `Vararg _ -> Some ([], [])
         | `Typed (t', p), t -> Option.map (fun (eqs, ps) -> t' :: eqs, ps) @@ match_t (p, t)
         | `Array ps, `Array t -> Some ([], List.map (fun p -> t, p) ps)
+        | `Array ps, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = SexpConstructors.find_opt (tuple_label, List.length ps) xs in
+            Option.map (fun ts -> [], List.combine ts ps) ts
+
         | `Sexp (x, ps), `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
             let ts = SexpConstructors.find_opt (x, List.length ps) xs in
             Option.map (fun ts -> [], List.combine ts ps) ts
@@ -1491,6 +1528,10 @@ module Type = struct
         | `Unboxed, `Int -> Some ([], [])
         | `StringTag, `String -> Some ([], [])
         | `ArrayTag, `Array t -> Some ([], [t, `Wildcard])
+        | `ArrayTag, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
+            let ts = SexpConstructors.find_first_opt (fun (x, _) -> x = tuple_label) xs in
+            Option.map (fun (_, ts) -> [], List.map (fun t -> t, `Wildcard) ts) ts
+
         | `SexpTag, `Sexp (xs, None) when SexpConstructors.cardinal xs = 1 ->
             let ts = snd @@ SexpConstructors.find_first (fun _ -> true) xs in
             Some ([], List.map (fun t -> t, `Wildcard) ts)
@@ -1820,7 +1861,6 @@ module Type = struct
 
                 begin match shaps st.s t with
                 | `LVar (_, l) -> handle_lvar l
-
                 | `Sexp (xs, row) as t ->
                     let f x ts (cs, st) =
                         let t' = `Sexp (SexpConstructors.singleton x ts, None) in
@@ -1862,6 +1902,14 @@ module Type = struct
                     Some ([`Eq (t, t')], st)
 
                 | _ -> raise @@ Failure (NotSexp t, c_aux, st.s)
+                end
+
+            | `Tuple (t, ts) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) -> handle_lvar l
+                | `Array t -> Some (List.map (fun t' -> `Eq (t, t')) ts, st)
+                | `Sexp _ -> Some ([`Sexp (tuple_label, t, ts)], st)
+                | _ -> raise @@ Failure (NotTuple t, c_aux, st.s)
                 end
 
             | _ -> raise @@ Failure (NotSupported, c_aux, st.s)
@@ -1916,6 +1964,19 @@ module Type = struct
                     let row = new_var () in
 
                     gen [[t, `Sexp (SexpConstructors.empty, Some row)]]
+
+                | _ -> Option.to_list @@ single_step_det st (c, inf)
+                end
+
+            | `Tuple (t, _) ->
+                begin match shaps st.s t with
+                | `LVar (_, l) when l >= level ->
+                    let t' = `LVar (new_var (), l) in
+                    let row = new_var () in
+
+                    gen [ [t, `Array t']
+                        ; [t, `Sexp (SexpConstructors.empty, Some row)]
+                        ]
 
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
@@ -2127,7 +2188,12 @@ module Type = struct
                 let* c2, t' = infer_t ctx r in
                 St.return (return (`Eq (t, t')) :: c1 @ c2, t)
 
-            | E.Binop (l, r) ->
+            | E.Binop (l, r, true) ->
+                let* c1, t1 = infer_t ctx l in
+                let* c2, t2 = infer_t ctx r in
+                St.return (return (`Eq (t1, t2)) :: c1 @ c2, `Int)
+
+            | E.Binop (l, r, false) ->
                 let* c1, t1 = infer_t ctx l in
                 let* c2, t2 = infer_t ctx r in
                 St.return (return (`Eq (t1, `Int)) :: return (`Eq (t2, `Int)) :: c1 @ c2, `Int)
@@ -2240,9 +2306,10 @@ module Type = struct
                 let* cts = St.map_m (infer_t ctx) xs in
 
                 let t = new_tv () in
-                let c = List.concat_map (fun (c', s) -> return (`Eq (t, s)) :: c') cts in
+                let ts = List.map snd cts in
+                let c = List.concat_map fst cts in
 
-                St.return (c, `Array t)
+                St.return (return (`Tuple (t, ts)) :: c, t)
 
             | E.Sexp (x, xs) ->
                 let* cts = St.map_m (infer_t ctx) xs in
@@ -2366,6 +2433,7 @@ module Type = struct
         | `Call (t, ts, t') -> `Call (mono_t bvs t, List.map (mono_t bvs) ts, mono_t bvs t')
         | `Match (t, ps) -> `Match (mono_t bvs t, List.map (mono_p bvs) ps)
         | `Sexp (x, t, ts) -> `Sexp (x, mono_t bvs t, List.map (mono_t bvs) ts)
+        | `Tuple (t, ts) -> `Tuple (mono_t bvs t, List.map (mono_t bvs) ts)
         in
 
         object
@@ -2479,6 +2547,12 @@ module Interface = struct
             append_t t ;
             append_list ~prefix:", " append_t ts ;
             append ")"
+
+        | `Tuple (t, ts) ->
+            append "Tuple (" ;
+            append_t t ;
+            append_list ~prefix:", " append_t ts ;
+            append ")"
         in
 
         Type.Context.iter (fun x t -> append x ; append " : " ; append_t t ; append " ;\n") ctx ;
@@ -2528,12 +2602,13 @@ module Interface = struct
             pArrayTag: "#array" { `ArrayTag } ;
             pSexpTag: "#sexp" { `SexpTag } ;
             pFunTag: "#fun" { `FunTag } ;
-            cnstr  : cInd | cIndI | cCall | cMatch | cSexp ;
+            cnstr  : cInd | cIndI | cCall | cMatch | cSexp | cTuple ;
             cInd   : "Ind" "(" t1:typ "," t2:typ ")" { `Ind (t1, t2) } ;
             cIndI  : "IndI" "(" i:DECIMAL "," t1:typ "," t2:typ ")" { `IndI (i, t1, t2) } ;
             cCall  : "Call" "(" ft:typ "," ts:(typ -",")* t:typ ")" { `Call (ft, ts, t) } ;
             cMatch : "Match" "(" t:typ ps:(-"," pat)* ")" { `Match (t, ps) } ;
             cSexp  : "Sexp" "(" x:IDENT "," t:typ ts:(-"," typ)* ")" { `Sexp (x, t, ts) } ;
+            cTuple : "Tuple" "(" t:typ ts:(-"," typ)* ")" { `Tuple (t, ts) } ;
             interface: decl*
         ) in
 
