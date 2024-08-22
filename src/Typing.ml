@@ -2448,10 +2448,11 @@ open Ostap
 module Interface = struct
 
     (* Generates an interface file *)
-    let gen ctx =
+    let gen var_base ctx =
         let buf = Buffer.create 256 in
         let append str = Buffer.add_string buf str in
         let append_i x = append (string_of_int x) in
+        let append_var x = append_i (x - var_base) in
 
         let append_list ?(prefix="") ?(suffix="") ?(sep=", ") append_x = function
         | [] -> ()
@@ -2463,7 +2464,7 @@ module Interface = struct
         in
 
         let rec append_t = function
-        | `GVar x -> append_i x
+        | `GVar x -> append_var x
         | `LVar _ -> failwith "BUG: logic variable in typed interface"
         | `Int -> append "Int"
         | `String -> append "String"
@@ -2472,7 +2473,7 @@ module Interface = struct
         | `Arrow (xs, c, ts, t) ->
             append "forall" ;
 
-            append_list ~prefix:" " append_i @@ Type.IS.elements xs ;
+            append_list ~prefix:" " append_var @@ Type.IS.elements xs ;
             append "." ;
 
             append_list ~prefix:" " append_c c ;
@@ -2490,7 +2491,7 @@ module Interface = struct
 
         | `Mu (x, t) ->
             append "mu " ;
-            append_i x ;
+            append_var x ;
             append ". " ;
             append_t t
 
@@ -2558,12 +2559,18 @@ module Interface = struct
 
     (* Read an interface file *)
     let [@ocaml.warning "-26-27"] read max_var fname =
-        let on_var x = max_var := Int.max !max_var x in
+        let var_base = !max_var in
+
+        let on_var x =
+            let x = var_base + x in
+            max_var := Int.max !max_var x ;
+            x
+        in
 
         let ostap (
             decl   : i:IDENT ":" t:typ ";" { (i, t) } ;
             typ    : tVar | tInt | tString | tArray | tSexp | tArrow | tVararg | tMu ;
-            tVar   : v:DECIMAL { on_var v ; `GVar v } ;
+            tVar   : v:DECIMAL { `GVar (on_var v) } ;
             tInt   : "Int" { `Int } ;
             tString: "String" { `String } ;
             tArray : "[" t:typ "]" { `Array t } ;
@@ -2579,13 +2586,10 @@ module Interface = struct
                      "." c:(!(Util.list0)[cnstr])
                      "=>" "(" ts:(!(Util.list0)[typ]) ")"
                      "->" t:typ
-            {
-                List.iter on_var xs ;
-                `Arrow (Type.IS.of_seq @@ List.to_seq xs, c, ts, t)
-            } ;
+            { `Arrow (Type.IS.of_seq @@ Seq.map on_var @@ List.to_seq xs, c, ts, t) } ;
             tVararg: "(" ts:(!(Util.list)[typ] -"," | (!(Combinators.empty)) { [] }) -"..." ")"
                      "->" t:typ { `Vararg (ts, t) } ;
-            tMu    : "mu" x:DECIMAL "." t:typ { on_var x ; `Mu (x, t) } ;
+            tMu    : "mu" x:DECIMAL "." t:typ { `Mu (on_var x, t) } ;
             pat    : pWildcard | pTyped | pArray | pSexp | pBoxed | pUnboxed
                    | pStringTag | pArrayTag | pSexpTag | pFunTag ;
             pWildcard: "_" { `Wildcard } ;

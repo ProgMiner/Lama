@@ -303,7 +303,7 @@ let[@ocaml.warning "-32"] main =
                 print_endline "Public declarations:" ;
                 print_pub_decls decls ;
 
-                cmd#dump_file "ti" (T.Interface.gen decls)
+                cmd#dump_file "ti" (T.Interface.gen !max_var decls)
 
             with T.Type.Simpl.Failure err ->
                 let open T.Type.Simpl in

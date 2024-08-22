@@ -40,6 +40,7 @@ public fun memo (f) {
       var t =
          case findHashTab (deref (tab), f) of
            Some (t) -> t
+         | None -> failure ("wtf") ; 0
          esac;
         
       if log then printf ("Applying memoized parser to %s\n", s.string) fi;
@@ -64,6 +65,7 @@ public fun memo (f) {
                      t ::= addMap (deref (t), s, [ks, addSet (rs, r)]);
                      iterSet (fun (k) {k (r)}, ks)
                    fi
+               | None -> failure ("wtf") ; skip
                esac
              }          
             )
@@ -231,7 +233,7 @@ fun createResult () {
         then
           var c = compare ([line, col], [l, c]);
 
-          if   c == 0 then errors ::= err : deref (errors)
+          if   c == 0 then errors ::= err : deref (errors) ; skip
           elif c <  0 then errors ::= {err}; line ::= l; col ::= c
           fi
         else
@@ -246,7 +248,7 @@ fun createResult () {
   fun get () {
     if   deref (hasValue) then Succ (deref (value))
     elif deref (hasError) then Fail (deref (errors), deref (line), deref (col))
-    else failure ("Ostap::createAcceptor::get: nothing to return\n")
+    else failure ("Ostap::createAcceptor::get: nothing to return\n") ; skip
     fi
   }
 
