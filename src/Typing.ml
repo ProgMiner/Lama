@@ -1191,8 +1191,6 @@ module Type = struct
             type t = Subst.t -> Subst.t
         end in
 
-        (* TODO: how to deal with fully-defined and equivalent recursive types??? *)
-
         let rec unify_t (ctx : VMap.t) : t * t -> Mut.t = function
 
         (* === var vs var === *)
@@ -1205,7 +1203,7 @@ module Type = struct
             fun s -> begin
                 (* `bind_vars` respects leveling *)
                 try Subst.bind_vars (x, l) (y, k) s
-                with Subst.Need_unification (t1, t2) ->
+                with Subst.Need_unification (s, t1, t2) ->
                     unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
@@ -1226,7 +1224,7 @@ module Type = struct
                 let s = (lift_lvars var_gen l)#t IS.empty t s in
 
                 try Subst.bind_type (x, l) t s
-                with Subst.Need_unification (t1, t2) ->
+                with Subst.Need_unification (s, t1, t2) ->
                     unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
@@ -1324,12 +1322,12 @@ module Type = struct
 
             if xs1'empty && xs2'empty then begin fun s ->
                 try bind_rows s (row1, row2)
-                with Subst.Need_unification (t1, t2) ->
+                with Subst.Need_unification (s, t1, t2) ->
                     unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs1'empty then begin fun s ->
                 try bind_row_sexp s (row1, (xs2, row2))
-                with Subst.Need_unification (t1, t2) ->
+                with Subst.Need_unification (s, t1, t2) ->
                     unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs2'empty then begin
@@ -1665,7 +1663,7 @@ module Type = struct
 
             let s =
                 try Subst.bind_sexp row (SexpConstructors.empty, None) s
-                with Subst.Need_unification (Subst.Sexp x1, Subst.Sexp x2) ->
+                with Subst.Need_unification (s, Subst.Sexp x1, Subst.Sexp x2) ->
                     if x1 <> x2 then
                         failwith @@ Printf.sprintf "[%s ; %s]" (show_sexp x1) (show_sexp x2) ;
 
@@ -1974,8 +1972,8 @@ module Type = struct
                     let t' = `LVar (new_var (), l) in
                     let row = new_var () in
 
-                    gen [ [t, `Array t']
-                        ; [t, `Sexp (SexpConstructors.empty, Some row)]
+                    gen [ [t, `Sexp (SexpConstructors.empty, Some row)]
+                        ; [t, `Array t']
                         ]
 
                 | _ -> Option.to_list @@ single_step_det st (c, inf)

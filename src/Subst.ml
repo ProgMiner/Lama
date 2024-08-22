@@ -12,7 +12,7 @@ module Make(T : Term) : sig
 
     type t
 
-    exception Need_unification of T.t * T.t
+    exception Need_unification of t * T.t * T.t
 
     val empty: t
 
@@ -45,7 +45,7 @@ end = struct
         mutable nodes: node IntMap.t;
     }
 
-    exception Need_unification of T.t * T.t
+    exception Need_unification of t * T.t * T.t
 
     let empty = { nodes = IntMap.empty }
 
@@ -80,13 +80,12 @@ end = struct
         let u_node = Option.value ~default:(default_node u k) u_node in
 
         let term = match v_node.term, u_node.term with
-        | Some v_term, Some u_term -> raise @@ Need_unification (v_term, u_term)
-        | Some v_term, None        -> Some v_term
-        | None,        Some u_term -> Some u_term
+        | Some v_term, _           -> Some v_term
+        | _,           Some u_term -> Some u_term
         | None,        None        -> None
         in
 
-        if v_node.level > u_node.level then
+        let s = if v_node.level > u_node.level then
             let nodes = IntMap.add v { v_node with parent = u } s.nodes in
             let nodes = IntMap.add u { u_node with term = term } nodes in
             { nodes }
@@ -95,13 +94,18 @@ end = struct
             let nodes = IntMap.add u { u_node with parent = v } s.nodes in
             let nodes = IntMap.add v { v_node with term = term } nodes in
             { nodes }
+        in
+
+        match v_node.term, u_node.term with
+        | Some v_term, Some u_term -> raise @@ Need_unification (s, v_term, u_term)
+        | _ -> s
 
     let bind_term (v, l) t s =
         let v, v_node = find_internal v s in
         let v_node = Option.value ~default:(default_node v l) v_node in
 
         begin match v_node.term with
-        | Some t' -> raise @@ Need_unification (t, t')
+        | Some t' -> raise @@ Need_unification (s, t, t')
         | None -> ()
         end ;
 
