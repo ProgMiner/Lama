@@ -1221,7 +1221,8 @@ module Type = struct
                  *  !!! same operation we need to do with all residual constraints below !!!
                  *)
 
-                let s = (lift_lvars var_gen l)#t IS.empty t s in
+                let bvs = IS.of_seq @@ Seq.map fst @@ VMap.to_seq ctx in
+                let s = (lift_lvars var_gen l)#t bvs t s in
 
                 try Subst.bind_type (x, l) t s
                 with Subst.Need_unification (s, t1, t2) ->
@@ -1709,8 +1710,8 @@ module Type = struct
 
                 Some res
 
-                with Unification_failure (s, t1, t2) ->
-                    raise @@ Failure (Unification (t1, t2), c_aux, s)
+                with Unification_failure (_, t1, t2) ->
+                    raise @@ Failure (Unification (t1, t2), c_aux, st.s)
                 end
 
             | `Ind (t1, t2) ->

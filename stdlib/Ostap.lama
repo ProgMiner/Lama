@@ -313,7 +313,7 @@ fun altl (level) {
 public fun expr (ops, opnd) {
   fun inner (ops) {
     case ops of
-      {}         -> fun (c) {opnd @ c}
+      {}         -> coerce (fun (c) {opnd @ c})
     | level : tl ->
         var lops = altl (level),
             next = inner (tl);
@@ -333,7 +333,7 @@ public fun expr (ops, opnd) {
            | next (id) @ c
            }
 
-           this
+           coerce (this)
         esac
     esac  
   }

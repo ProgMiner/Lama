@@ -1234,6 +1234,8 @@ extern int Ltime () {
   return BOX(t.tv_sec * 1000000 + t.tv_nsec / 1000);
 }
 
+extern void *Lcoerce (void *v) { return v; }
+
 extern void set_args (int argc, char *argv[]) {
   data *a;
   int   n = argc;
