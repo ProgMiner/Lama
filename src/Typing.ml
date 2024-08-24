@@ -7,6 +7,8 @@ module Expr = struct
 
         public : bool;
         name : string;
+
+        deps : string list;
     }
 
     type position = {
@@ -53,6 +55,10 @@ module Expr = struct
     | _ -> false
 
     module L = Language.Expr
+    module SS = Set.Make(String)
+
+    let cur_scope = Stdlib.ref SS.empty
+    let cur_deps = Stdlib.ref SS.empty
 
     let rec from_language name e =
         let return form = form, { name ; pos = { row = 0 ; col = 0 } } in
@@ -62,8 +68,8 @@ module Expr = struct
         | L.Array xs -> return @@ Array (List.map (from_language name) xs)
         | L.String x -> return @@ String x
         | L.Sexp (x, xs) -> return @@ Sexp (x, List.map (from_language name) xs)
-        | L.Var x -> return @@ Name x
-        | L.Ref x -> return @@ Name x
+        | L.Var x -> cur_deps := SS.add x !cur_deps ; return @@ Name x
+        | L.Ref x -> cur_deps := SS.add x !cur_deps ; return @@ Name x
         | L.Binop (op, l, r) ->
             let is_eq = op = "==" || op = "!=" in
             return @@ Binop (from_language name l, from_language name r, is_eq)
@@ -83,19 +89,36 @@ module Expr = struct
 
         | L.Ignore t -> from_language name t
         | L.Unit -> return @@ Int 0
-        | L.Scope (ds, t) -> return @@ Scope (List.map decl_from_language ds, from_language name t)
+        | L.Scope (ds, t) ->
+            let old_scope = !cur_scope in
+            cur_scope := SS.of_seq @@ Seq.map fst @@ List.to_seq ds ;
+
+            let res = Scope (List.map decl_from_language ds, from_language name t) in
+
+            cur_scope := old_scope ;
+            return res
+
         | L.Lambda (xs, b) -> return @@ Lambda (xs, from_language name b)
         | L.Leave -> invalid_arg "Leave"
         | L.Intrinsic _ -> invalid_arg "Intrinsic"
         | L.Control _ -> invalid_arg "Control"
 
     and decl_from_language (name, (q, d)) =
-        let inf = { public = is_public q ; name } in
+        let old_deps = !cur_deps in
+        cur_deps := SS.empty ;
 
-        match d with
-        | `Fun      (xs,  t) -> Fun (xs, from_language name t), inf
-        | `Variable  None    -> Var (Int 0, { name ; pos = { row = 0 ; col = 0 } }), inf
-        | `Variable (Some t) -> Var (from_language name t), inf
+        let d = match d with
+        | `Fun      (xs,  t) -> Fun (xs, from_language name t)
+        | `Variable  None    -> Var (Int 0, { name ; pos = { row = 0 ; col = 0 } })
+        | `Variable (Some t) -> Var (from_language name t)
+        in
+
+        let deps = SS.elements @@ SS.inter !cur_scope !cur_deps in
+        let inf = { public = is_public q ; name ; deps } in
+
+        cur_deps := SS.union old_deps @@ SS.diff !cur_deps !cur_scope ;
+
+        d, inf
 end
 
 module Type = struct
@@ -122,14 +145,14 @@ module Type = struct
     | `String                       (* string *)
     | `Array    of t                (* array *)
     | `Sexp     of sexp             (* S-expression *)
-    | `Arrow    of IS.t * c list * t list * t (* arrow *)
+    | `Arrow    of t list * t       (* arrow *)
     | `Vararg   of t list * t       (* vararg function type *)
     | `Mu       of int * t          (* mu-type *)
     ]
 
     and sexp = t list SexpConstructors.t * int option
 
-    and p = [
+    type p = [
     | `Wildcard
     | `Typed    of t * p
     | `Array    of p list
@@ -142,7 +165,7 @@ module Type = struct
     | `FunTag
     ]
 
-    and c = [
+    type c = [
     | `Eq       of t * t            (* syntax equality *)
     | `Ind      of t * t            (* indexable *)
     | `IndI     of int * t * t      (* Ind with constant index *)
@@ -151,6 +174,8 @@ module Type = struct
     | `Sexp     of string * t * t list (* type is S-expression *)
     | `Tuple    of t * t list       (* type is tuple-like *)
     ]
+
+    type tsc = IS.t * c list * t
 
     type c_info = {
 
@@ -162,11 +187,6 @@ module Type = struct
 
     type c_aux = c * c_info
 
-    let show_is is =
-        let is = IS.elements is in
-        let is = String.concat ", " @@ List.map string_of_int is in
-        "{" ^ is ^ "}"
-
     let show_list f xs = String.concat ", " @@ List.map f xs
 
     let rec show_t : t -> _ = function
@@ -176,9 +196,7 @@ module Type = struct
     | `String -> "String"
     | `Array t -> Printf.sprintf "[%s]" @@ show_t t
     | `Sexp xs -> show_sexp xs
-    | `Arrow (xs, c, ts, t) -> Printf.sprintf "forall %s. (%s) => (%s) -> %s"
-        (show_is xs) (show_list show_c c) (show_list show_t ts) (show_t t)
-
+    | `Arrow (ts, t) -> Printf.sprintf "(%s) -> %s" (show_list show_t ts) (show_t t)
     | `Vararg (ts, t) -> Printf.sprintf "(%s, ...) -> %s" (show_list show_t ts) (show_t t)
     | `Mu (x, t) -> Printf.sprintf "mu %d. %s" x @@ show_t t
 
@@ -190,7 +208,7 @@ module Type = struct
 
         String.concat " \\/ " @@ xs @ row
 
-    and show_p : p -> _ = function
+    let rec show_p : p -> _ = function
     | `Wildcard -> "_"
     | `Typed (t, p) -> Printf.sprintf "%s @ %s" (show_t t) (show_p p)
     | `Array ps -> "[" ^ show_list show_p ps ^ "]"
@@ -202,7 +220,7 @@ module Type = struct
     | `SexpTag -> "#sexp"
     | `FunTag -> "#fun"
 
-    and show_c : c -> _ = function
+    let show_c : c -> _ = function
     | `Eq (l, r) -> Printf.sprintf "%s = %s" (show_t l) (show_t r)
     | `Ind (l, r) -> Printf.sprintf "Ind(%s, %s)" (show_t l) (show_t r)
     | `IndI (i, l, r) -> Printf.sprintf "Ind_%d(%s, %s)" i (show_t l) (show_t r)
@@ -210,6 +228,9 @@ module Type = struct
     | `Match (t, ps) -> Printf.sprintf "Match(%s, %s)" (show_t t) (show_list show_p ps)
     | `Sexp (x, t, ts) -> Printf.sprintf "Sexp_%s(%s)" x (show_list show_t @@ t :: ts)
     | `Tuple (t, ts) -> Printf.sprintf "Tuple(%s)" (show_list show_t @@ t :: ts)
+
+    let show_tsc (xs, c, t : tsc) = Printf.sprintf "forall {%s}. %s => %s"
+        (show_list string_of_int @@ IS.elements xs) (show_list show_c c) (show_t t)
 
     let rec lex_compare = function
     | [] -> 0
@@ -236,10 +257,8 @@ module Type = struct
     | `Sexp xs, `Sexp ys -> compare_sexp xs ys
     | `Sexp _, _ -> -1
     | _, `Sexp _ -> 1
-    | `Arrow (xs1, c1, ts1, t1), `Arrow (xs2, c2, ts2, t2) ->
-        lex_compare [ (fun () -> IS.compare xs1 xs2)
-                    ; (fun () -> List.compare compare_c c1 c2)
-                    ; (fun () -> List.compare compare_t ts1 ts2)
+    | `Arrow (ts1, t1), `Arrow (ts2, t2) ->
+        lex_compare [ (fun () -> List.compare compare_t ts1 ts2)
                     ; (fun () -> compare_t t1 t2)
                     ]
 
@@ -266,7 +285,7 @@ module Type = struct
                     ; (fun () -> SexpConstructors.compare (List.compare compare_t) xs1 xs2)
                     ]
 
-    and compare_p (p1 : p) (p2 : p) = match p1, p2 with
+    let rec compare_p (p1 : p) (p2 : p) = match p1, p2 with
     | `Wildcard, `Wildcard -> 0
     | `Wildcard, _ -> -1
     | _, `Wildcard -> 1
@@ -307,7 +326,7 @@ module Type = struct
     | _, `FunTag -> 1
     [@@warning "-11"]
 
-    and compare_c (c1 : c) (c2 : c) = match c1, c2 with
+    let compare_c (c1 : c) (c2 : c) = match c1, c2 with
     | `Eq (l1, r1), `Eq (l2, r2) ->
         lex_compare [ (fun () -> compare_t l1 l2)
                     ; (fun () -> compare_t r1 r2)
@@ -437,7 +456,7 @@ module Type = struct
         | `String -> `String
         | `Array t -> `Array (subst_t t)
         | `Sexp xs -> `Sexp (subst_sexp xs)
-        | `Arrow (xs, c, ts, t) -> `Arrow (xs, List.map subst_c c, List.map subst_t ts, subst_t t)
+        | `Arrow (ts, t) -> `Arrow (List.map subst_t ts, subst_t t)
         | `Vararg (ts, t) -> `Vararg (List.map subst_t ts, subst_t t)
         | `Mu (x, t) -> `Mu (x, subst_t t)
 
@@ -455,8 +474,9 @@ module Type = struct
 
                 (* tail recursion intended *)
                 subst_sexp (xs, row')
+        in
 
-        and subst_p : p -> p = function
+        let rec subst_p : p -> p = function
         | `Wildcard -> `Wildcard
         | `Typed (t, p) -> `Typed (subst_t t, subst_p p)
         | `Array ps -> `Array (List.map subst_p ps)
@@ -467,8 +487,9 @@ module Type = struct
         | `ArrayTag -> `ArrayTag
         | `SexpTag -> `SexpTag
         | `FunTag -> `FunTag
+        in
 
-        and subst_c : c -> c = function
+        let subst_c : c -> c = function
         | `Eq (t1, t2) -> `Eq (subst_t t1, subst_t t2)
         | `Ind (t1, t2) -> `Ind (subst_t t1, subst_t t2)
         | `IndI (i, t1, t2) -> `IndI (i, subst_t t1, subst_t t2)
@@ -478,12 +499,15 @@ module Type = struct
         | `Tuple (t, ts) -> `Tuple (subst_t t, List.map subst_t ts)
         in
 
+        let subst_tsc (xs, c, t : tsc) = xs, List.map subst_c c, subst_t t in
+
         object
 
             method t = subst_t
             method sexp = subst_sexp
             method p = subst_p
             method c = subst_c
+            method tsc = subst_tsc
         end
 
     (* lift unbound logic variables from lower levels to `k` *)
@@ -532,13 +556,7 @@ module Type = struct
         | `String -> Fun.id
         | `Array t -> lift_t bvs t
         | `Sexp xs -> lift_sexp bvs xs
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in fun s ->
-                let s = List.fold_left (Fun.flip @@ lift_c bvs) s c in
-                let s = List.fold_left (Fun.flip @@ lift_t bvs) s ts in
-                let s = lift_t bvs t s in
-                s
-
+        | `Arrow (ts, t) -> fun s -> lift_t bvs t @@ List.fold_left (Fun.flip @@ lift_t bvs) s ts
         | `Vararg (ts, t) -> fun s -> lift_t bvs t @@ List.fold_left (Fun.flip @@ lift_t bvs) s ts
         | `Mu (x, t) -> lift_t (IS.add x bvs) t
 
@@ -551,8 +569,9 @@ module Type = struct
             match Option.bind row @@ Fun.flip Subst.find_sexp s with
             | Some xs -> lift_sexp bvs xs s
             | None -> s
+        in
 
-        and lift_p bvs : p -> Mut.t = function
+        let rec lift_p bvs : p -> Mut.t = function
         | `Wildcard -> Fun.id
         | `Typed (t, p) -> fun s -> lift_p bvs p @@ lift_t bvs t s
         | `Array ps -> fun s -> List.fold_left (Fun.flip @@ lift_p bvs) s ps
@@ -563,8 +582,9 @@ module Type = struct
         | `ArrayTag -> Fun.id
         | `SexpTag -> Fun.id
         | `FunTag -> Fun.id
+        in
 
-        and lift_c bvs : c -> Mut.t = function
+        let lift_c bvs : c -> Mut.t = function
         | `Eq (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
         | `Ind (t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
         | `IndI (_, t1, t2) -> fun s -> lift_t bvs t2 @@ lift_t bvs t1 s
@@ -646,12 +666,10 @@ module Type = struct
         | `String -> `String, s
         | `Array t -> let t, s = ltog_t bvs s t in `Array t, s
         | `Sexp xs -> let xs, s = ltog_sexp bvs s xs in `Sexp xs, s
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            let c, s = map_m (ltog_c bvs) s c in
+        | `Arrow (ts, t) ->
             let ts, s = map_m (ltog_t bvs) s ts in
             let t, s = ltog_t bvs s t in
-            `Arrow (xs, c, ts, t), s
+            `Arrow (ts, t), s
 
         | `Vararg (ts, t) ->
             let ts, s = map_m (ltog_t bvs) s ts in
@@ -678,8 +696,9 @@ module Type = struct
                     let xs', s = ltog_sexp bvs s xs' in
                     let s = Subst.bind_sexp row' xs' s in
                     (xs, Some row'), s
+        in
 
-        and ltog_p bvs s : p -> p * Subst.t = function
+        let rec ltog_p bvs s : p -> p * Subst.t = function
         | `Wildcard -> `Wildcard, s
         | `Typed (t, p) ->
             let t, s = ltog_t bvs s t in
@@ -694,8 +713,9 @@ module Type = struct
         | `ArrayTag -> `ArrayTag, s
         | `SexpTag -> `SexpTag, s
         | `FunTag -> `FunTag, s
+        in
 
-        and ltog_c bvs s : c -> c * Subst.t = function
+        let ltog_c bvs s : c -> c * Subst.t = function
         | `Eq (t1, t2) ->
             let t1, s = ltog_t bvs s t1 in
             let t2, s = ltog_t bvs s t2 in
@@ -855,10 +875,7 @@ module Type = struct
         | `String -> `String
         | `Array t -> `Array (gtol_t bvs t)
         | `Sexp xs -> `Sexp (gtol_sexp bvs xs)
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            `Arrow (xs, List.map (gtol_c bvs) c, List.map (gtol_t bvs) ts, gtol_t bvs t)
-
+        | `Arrow (ts, t) -> `Arrow (List.map (gtol_t bvs) ts, gtol_t bvs t)
         | `Vararg (ts, t) -> `Vararg (List.map (gtol_t bvs) ts, gtol_t bvs t)
         | `Mu (x, t) -> `Mu (x, gtol_t (IS.add x bvs) t)
 
@@ -904,8 +921,9 @@ module Type = struct
                     cur_deps := old_deps ;
 
                     xs, Some row'
+        in
 
-        and gtol_p bvs : p -> p = function
+        let rec gtol_p bvs : p -> p = function
         | `Wildcard -> `Wildcard
         | `Typed (t, p) -> `Typed (gtol_t bvs t, gtol_p bvs p)
         | `Array ps -> `Array (List.map (gtol_p bvs) ps)
@@ -916,8 +934,9 @@ module Type = struct
         | `ArrayTag -> `ArrayTag
         | `SexpTag -> `SexpTag
         | `FunTag -> `FunTag
+        in
 
-        and gtol_c bvs : c -> c = function
+        let gtol_c bvs : c -> c = function
         | `Eq (t1, t2) -> `Eq (gtol_t bvs t1, gtol_t bvs t2)
         | `Ind (t1, t2) -> `Ind (gtol_t bvs t1, gtol_t bvs t2)
         | `IndI (i, t1, t2) -> `IndI (i, gtol_t bvs t1, gtol_t bvs t2)
@@ -1000,10 +1019,7 @@ module Type = struct
         | `String -> false
         | `Array t -> is_rec_t bvs t
         | `Sexp xs -> is_rec_sexp bvs xs
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            List.exists (is_rec_c bvs) c || List.exists (is_rec_t bvs) ts || is_rec_t bvs t
-
+        | `Arrow (ts, t) -> List.exists (is_rec_t bvs) ts || is_rec_t bvs t
         | `Vararg (ts, t) -> List.exists (is_rec_t bvs) ts || is_rec_t bvs t
         | `Mu (x, t) -> is_rec_t (IS.add x bvs) t
 
@@ -1015,8 +1031,9 @@ module Type = struct
                 | Some xs -> is_rec_sexp bvs xs
                 | None -> false
                 end
+        in
 
-        and is_rec_p bvs : p -> bool = function
+        let rec is_rec_p bvs : p -> bool = function
         | `Wildcard -> false
         | `Typed (t, p) -> is_rec_t bvs t || is_rec_p bvs p
         | `Array ps -> List.exists (is_rec_p bvs) ps
@@ -1027,8 +1044,9 @@ module Type = struct
         | `ArrayTag -> false
         | `SexpTag -> false
         | `FunTag -> false
+        in
 
-        and is_rec_c bvs : c -> bool = function
+        let is_rec_c bvs : c -> bool = function
         | `Eq (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
         | `Ind (t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
         | `IndI (_, t1, t2) -> is_rec_t bvs t1 || is_rec_t bvs t2
@@ -1069,19 +1087,17 @@ module Type = struct
             else `GVar x, s
 
         | `LVar (x, _) as t ->
-            if IS.mem x bvs then failwith "lift_lvars: bound logic variable" ;
+            if IS.mem x bvs then failwith "refresh_mu: bound logic variable" ;
             t, s
 
         | `Int -> `Int, s
         | `String -> `String, s
         | `Array t -> let t, s = remu_t bvs s t in `Array t, s
         | `Sexp xs -> let xs, s = remu_sexp bvs s xs in `Sexp xs, s
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            let c, s = map_m (remu_c bvs) s c in
+        | `Arrow (ts, t) ->
             let ts, s = map_m (remu_t bvs) s ts in
             let t, s = remu_t bvs s t in
-            `Arrow (xs, c, ts, t), s
+            `Arrow (ts, t), s
 
         | `Vararg (ts, t) ->
             let ts, s = map_m (remu_t bvs) s ts in
@@ -1103,8 +1119,9 @@ module Type = struct
 
             let xs, s = map_m_sexp (map_m @@ remu_t bvs) s xs in
             (xs, row), s
+        in
 
-        and remu_p bvs s : p -> p * Subst.t = function
+        let rec remu_p bvs s : p -> p * Subst.t = function
         | `Wildcard -> `Wildcard, s
         | `Typed (t, p) ->
             let t, s = remu_t bvs s t in
@@ -1119,8 +1136,9 @@ module Type = struct
         | `ArrayTag -> `ArrayTag, s
         | `SexpTag -> `SexpTag, s
         | `FunTag -> `FunTag, s
+        in
 
-        and remu_c bvs s : c -> c * Subst.t = function
+        let remu_c bvs s : c -> c * Subst.t = function
         | `Eq (t1, t2) ->
             let t1, s = remu_t bvs s t1 in
             let t2, s = remu_t bvs s t2 in
@@ -1158,12 +1176,21 @@ module Type = struct
             `Tuple (t, ts), s
         in
 
+        let remu_tsc bvs s (xs, c, t : tsc) =
+            let bvs = IS.union bvs xs in
+
+            let c, s = map_m (remu_c bvs) s c in
+            let t, s = remu_t bvs s t in
+            (xs, c, t), s
+        in
+
         object
 
             method t = remu_t
             method sexp = remu_sexp
             method p = remu_p
             method c = remu_c
+            method tsc = remu_tsc
         end
 
     (* unification, returns substitution and residual equations *)
@@ -1179,19 +1206,12 @@ module Type = struct
             idx
         in
 
-        let module VMap = struct
-
-            include Map.Make(Int)
-
-            type nonrec t = int option Stdlib.ref t
-        end in
-
         let module Mut = struct
 
             type t = Subst.t -> Subst.t
         end in
 
-        let rec unify_t (ctx : VMap.t) : t * t -> Mut.t = function
+        let rec unify_t : t * t -> Mut.t = function
 
         (* === var vs var === *)
 
@@ -1204,7 +1224,7 @@ module Type = struct
                 (* `bind_vars` respects leveling *)
                 try Subst.bind_vars (x, l) (y, k) s
                 with Subst.Need_unification (s, t1, t2) ->
-                    unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
+                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
         (* === var vs term === *)
@@ -1225,32 +1245,19 @@ module Type = struct
 
                 try Subst.bind_type (x, l) t s
                 with Subst.Need_unification (s, t1, t2) ->
-                    unify_t ctx (Subst.unpack_type t1, Subst.unpack_type t2) s
+                    unify_t (Subst.unpack_type t1, Subst.unpack_type t2) s
             end
 
-        | t1, (`LVar _ as t2) -> unify_t ctx (t2, t1)
+        | t1, (`LVar _ as t2) -> unify_t (t2, t1)
 
         (* === term vs term === *)
 
         | `GVar x, `GVar y when x = y -> Fun.id
-        | `GVar x, `GVar y when VMap.mem x ctx && VMap.mem y ctx ->
-            let x' = VMap.find x ctx in
-            let y' = VMap.find y ctx in
-
-            if Option.is_none !x' && Option.is_none !y' then begin
-                x' := Some y ;
-                y' := Some x ;
-                Fun.id
-            end else if !x' = Some y && !y' = Some x then
-                Fun.id
-            else
-                fun s -> raise @@ Unification_failure (s, `GVar x, `GVar y)
-
         | `Int, `Int -> Fun.id
         | `String, `String -> Fun.id
-        | `Array t1, `Array t2 -> unify_t ctx (t1, t2)
+        | `Array t1, `Array t2 -> unify_t (t1, t2)
         | `Sexp xs1, `Sexp xs2 ->
-            let unify_sexp = unify_sexp ctx (xs1, xs2) in
+            let unify_sexp = unify_sexp (xs1, xs2) in
 
             fun s ->
                 begin try unify_sexp s
@@ -1258,49 +1265,27 @@ module Type = struct
                     raise @@ Unification_failure (s, `Sexp xs1, `Sexp xs2)
                 end
 
-        | `Arrow (xs1, c1, ts1, t1) as ft1, (`Arrow (xs2, c2, ts2, t2) as ft2) ->
-            if IS.cardinal xs1 <> IS.cardinal xs2 || List.length c1 <> List.length c2
-                || List.length ts1 <> List.length ts2 || (xs1 <> xs2 && not (IS.disjoint xs1 xs2))
-            then
-                fun s -> raise @@ Unification_failure (s, ft1, ft2)
-
-            else
-                let ctx = if xs1 = xs2 then ctx else
-                    let f x = VMap.add x @@ Stdlib.ref None in
-                    let ctx = IS.fold f xs1 ctx in
-                    let ctx = IS.fold f xs2 ctx in
-                    ctx
-                in
-
-                fun s ->
-                    let s =
-                        try List.fold_left2 (fun s c1 c2 -> unify_c ctx (c1, c2) s) s c1 c2
-                        with Custom_unification_failure s ->
-                            raise @@ Unification_failure (s, ft1, ft2)
-                    in
-
-                    let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
-                    let s = unify_t ctx (t1, t2) s in
-                    s
+        | `Arrow (ts1, t1) as ft1, (`Arrow (ts2, t2) as ft2) ->
+            if List.length ts1 <> List.length ts2
+            then fun s -> raise @@ Unification_failure (s, ft1, ft2)
+            else fun s ->
+                let s = List.fold_left2 (fun s t1 t2 -> unify_t (t1, t2) s) s ts1 ts2 in
+                let s = unify_t (t1, t2) s in
+                s
 
         | `Vararg (ts1, t1), `Vararg (ts2, t2) -> fun s ->
-            let s = unify_t ctx (t1, t2) s in
+            let s = unify_t (t1, t2) s in
 
             let ts'l = Int.min (List.length ts1) (List.length ts2) in
             let ts1 = List.of_seq @@ Seq.take ts'l @@ List.to_seq ts1 in
             let ts2 = List.of_seq @@ Seq.take ts'l @@ List.to_seq ts2 in
 
-            List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2
+            List.fold_left2 (fun s t1 t2 -> unify_t (t1, t2) s) s ts1 ts2
 
-        | `Mu (x1, t1), `Mu (x2, t2) ->
-            if x1 = x2 then unify_t ctx (t1, t2) else
-                let ctx = VMap.add x1 (Stdlib.ref None) ctx in
-                let ctx = VMap.add x2 (Stdlib.ref None) ctx in
-                unify_t ctx (t1, t2)
-
+        | `Mu _, `Mu _ -> failwith "unify: unification of Mu-types is not supported"
         | t1, t2 -> fun s -> raise @@ Unification_failure (s, t1, t2)
 
-        and unify_sexp (ctx : VMap.t) ((xs1, row1), (xs2, row2)) : Mut.t =
+        and unify_sexp ((xs1, row1), (xs2, row2)) : Mut.t =
             let rec bind_rows s = function
             | None, None -> s
             | Some row1, None -> Subst.bind_sexp row1 (SexpConstructors.empty, None) s
@@ -1323,15 +1308,15 @@ module Type = struct
             if xs1'empty && xs2'empty then begin fun s ->
                 try bind_rows s (row1, row2)
                 with Subst.Need_unification (s, t1, t2) ->
-                    unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
+                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs1'empty then begin fun s ->
                 try bind_row_sexp s (row1, (xs2, row2))
                 with Subst.Need_unification (s, t1, t2) ->
-                    unify_sexp ctx (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
+                    unify_sexp (Subst.unpack_sexp t1, Subst.unpack_sexp t2) s
 
             end else if xs2'empty then begin
-                unify_sexp ctx ((xs2, row2), (xs1, row1))
+                unify_sexp ((xs2, row2), (xs1, row1))
 
             end else begin
                 let module SLS = Set.Make(SexpLabel) in
@@ -1343,7 +1328,7 @@ module Type = struct
                     let ts1 = SexpConstructors.find x xs1 in
                     let ts2 = SexpConstructors.find x xs2 in
 
-                    List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2
+                    List.fold_left2 (fun s t1 t2 -> unify_t (t1, t2) s) s ts1 ts2
                 in
 
                 let both = SLS.inter xs1'labels xs2'labels in
@@ -1359,7 +1344,7 @@ module Type = struct
                     let row = new_var () in
 
                     let f row' xs =
-                        unify_sexp ctx ((SexpConstructors.empty, row'), (xs, Some row))
+                        unify_sexp ((SexpConstructors.empty, row'), (xs, Some row))
                     in
 
                     let row1_f = f row1 xs2_only in
@@ -1368,79 +1353,16 @@ module Type = struct
                     fun s -> row2_f @@ row1_f @@ both_f s
 
                 end else begin
-                    let only_f = unify_sexp ctx ((xs1_only, row1), (xs2_only, row2)) in
+                    let only_f = unify_sexp ((xs1_only, row1), (xs2_only, row2)) in
                     fun s -> only_f @@ both_f s
                 end
             end
-
-        and unify_p (ctx : VMap.t) : p * p -> Mut.t = function
-        | `Wildcard, `Wildcard -> Fun.id
-        | `Typed (t1, p1), `Typed (t2, p2) -> fun s ->
-            let s = unify_t ctx (t1, t2) s in
-            let s = unify_p ctx (p1, p2) s in
-            s
-
-        | `Array ps1, `Array ps2 when List.length ps1 = List.length ps2 -> fun s ->
-            List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2
-
-        | `Sexp (x1, ps1), `Sexp (x2, ps2)
-        when x1 = x2 && List.length ps1 = List.length ps2 -> fun s ->
-            List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2
-
-        | `Boxed, `Boxed -> Fun.id
-        | `Unboxed, `Unboxed -> Fun.id
-        | `StringTag, `StringTag -> Fun.id
-        | `ArrayTag, `ArrayTag -> Fun.id
-        | `SexpTag, `SexpTag -> Fun.id
-        | `FunTag, `FunTag -> Fun.id
-        | _, _ -> fun s -> raise @@ Custom_unification_failure s
-
-        and unify_c (ctx : VMap.t) : c * c -> Mut.t = function
-        | `Eq (l1, r1), `Eq (l2, r2) -> fun s ->
-            let s = unify_t ctx (l1, l2) s in
-            let s = unify_t ctx (r1, r2) s in
-            s
-
-        | `Ind (l1, r1), `Ind (l2, r2) -> fun s ->
-            let s = unify_t ctx (l1, l2) s in
-            let s = unify_t ctx (r1, r2) s in
-            s
-
-        | `IndI (i1, l1, r1), `IndI (i2, l2, r2) when i1 = i2 -> fun s ->
-            let s = unify_t ctx (l1, l2) s in
-            let s = unify_t ctx (r1, r2) s in
-            s
-
-        | `Call (ft1, ts1, t1), `Call (ft2, ts2, t2)
-        when List.length ts1 = List.length ts2 -> fun s ->
-            let s = unify_t ctx (ft1, ft2) s in
-            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
-            let s = unify_t ctx (t1, t2) s in
-            s
-
-        | `Match (t1, ps1), `Match (t2, ps2) when List.length ps1 = List.length ps2 -> fun s ->
-            let s = unify_t ctx (t1, t2) s in
-            let s = List.fold_left2 (fun s p1 p2 -> unify_p ctx (p1, p2) s) s ps1 ps2 in
-            s
-
-        | `Sexp (x1, t1, ts1), `Sexp (x2, t2, ts2)
-        when x1 = x2 && List.length ts1 = List.length ts2 -> fun s ->
-            let s = unify_t ctx (t1, t2) s in
-            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
-            s
-
-        | `Tuple (t1, ts1), `Tuple (t2, ts2) when List.length ts1 = List.length ts2 -> fun s ->
-            let s = unify_t ctx (t1, t2) s in
-            let s = List.fold_left2 (fun s t1 t2 -> unify_t ctx (t1, t2) s) s ts1 ts2 in
-            s
-
-        | _, _ -> fun s -> raise @@ Custom_unification_failure s
         in
 
         object
 
-            method t = unify_t VMap.empty
-            method sexp = unify_sexp VMap.empty
+            method t = unify_t
+            method sexp = unify_sexp
         end
 
     (* constraints simplifier *)
@@ -1684,15 +1606,6 @@ module Type = struct
 
             (* TODO: infer from context (residuals) *)
 
-            let find_rec_call ft =
-                let f = function
-                | `Call (ft', _, _) -> shaps st.s ft' = ft
-                | _ -> false
-                in
-
-                List.find_opt f inf.parents
-            in
-
             match c with
             | `Eq (t1, t2) -> begin try
                 let s = unify#t (t1, t2) st.s in
@@ -1784,53 +1697,14 @@ module Type = struct
 
                     handle_lvar @@ Int.max l params_level
 
-                | `Arrow (xs, fc, fts, ft) as ft' ->
+                | `Arrow (fts, ft) as ft' ->
                     begin
                         let args_num = List.length ts in
                         if args_num <> List.length fts then
                             raise @@ Failure (WrongArgsNum (ft', args_num), c_aux, st.s)
                     end ;
 
-                    let fc, fts, ft, s =
-                        match find_rec_call ft' with
-                        | None ->
-                            (* special case when no bound variables in function type
-                             *
-                             * in this case we have no need to refresh variables
-                             * and able to allow logic variables in type
-                             *)
-
-                            if IS.is_empty xs then fc, fts, ft, st.s else begin
-
-                                let f x = x, new_var () in
-                                let xs = IM.of_seq @@ Seq.map f @@ IS.to_seq xs in
-
-                                let gtol = gvars_to_lvars var_gen level st.s xs in
-                                let fc = List.map (gtol#c IS.empty) fc in
-                                let fts = List.map (gtol#t IS.empty) fts in
-                                let ft = gtol#t IS.empty ft in
-                                let s = gtol#finalize () in
-
-                                fc, fts, ft, s
-                            end
-
-                        (* if we found that current Call produced by Call on the same type,
-                         * we just require that current call signature is same with previous
-                         *
-                         * it disables polymorphic recursion but a good way to
-                         * allow monomorphic recursive functions
-                         *)
-                        | Some (`Call (_, ts', t')) -> [], ts', t', st.s
-                        | Some _ -> failwith "BUG: find_rec_call returned not Call constraint"
-                    in
-
-                    let st = { st with s } in
-
-                    let c = List.map2 (fun ft t -> `Eq (ft, t)) fts ts in
-                    let c = `Eq (ft, t) :: c in
-                    let c = fc @ c in
-
-                    Some (c, st)
+                    Some (List.map2 (fun ft t -> `Eq (ft, t)) (ft :: fts) (t :: ts), st)
 
                 | `Vararg (fts, ft) as ft' ->
                     begin
@@ -1847,9 +1721,7 @@ module Type = struct
                         List.map2 (fun ft t -> `Eq (ft, t)) fts ts
                     in
 
-                    let c = `Eq (ft, t) :: c in
-
-                    Some (c, st)
+                    Some (`Eq (ft, t) :: c, st)
 
                 | _ -> raise @@ Failure (NotCallable ft, c_aux, st.s)
                 end
@@ -1938,9 +1810,9 @@ module Type = struct
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
-            | `Call (ft, ts, t) when greedy > 2 ->
+            | `Call (ft, ts, t) ->
                 begin match shaps st.s ft with
-                | `LVar (_, l) when l >= level -> gen [[ft, `Arrow (IS.empty, [], ts, t)]]
+                | `LVar (_, l) when l >= level && greedy > 2 -> gen [[ft, `Arrow (ts, t)]]
                 | _ -> Option.to_list @@ single_step_det st (c, inf)
                 end
 
@@ -2076,12 +1948,12 @@ module Type = struct
 
     (* type inferrer *)
 
-    type decl_type = string * t * decl_type list
+    type decl_type = string * tsc * decl_type list
 
     let infer prev_var =
         let module E = Expr in
 
-        let prev_var_idx = Stdlib.ref prev_var in
+        let var_gen = Stdlib.ref prev_var in
         let current_level = Stdlib.ref 0 in
 
         let public_names = Stdlib.ref Context.empty in
@@ -2090,18 +1962,18 @@ module Type = struct
         let current_path = Stdlib.ref [] in
 
         let new_var () =
-            let idx = !prev_var_idx + 1 in
-            prev_var_idx := idx ;
+            let idx = !var_gen + 1 in
+            var_gen := idx ;
             idx
         in
 
         let new_tv () = `LVar (new_var (), !current_level) in
 
-        let rec infer_p ctx : Pattern.t -> p * t Context.t = function
+        let rec infer_p ctx : Pattern.t -> p * tsc Context.t = function
         | Pattern.Wildcard -> `Wildcard, ctx
         | Pattern.Named (x, p) ->
             let t = new_tv () in
-            let ctx = Context.add x t ctx in
+            let ctx = Context.add x (IS.empty, [], t) ctx in
             let p, ctx = infer_p ctx p in
             `Typed (t, p), ctx
 
@@ -2170,8 +2042,6 @@ module Type = struct
                 let* c1, ctx = infer_decls ctx ds in
                 let* c2, t = infer_t ctx e in
 
-                current_decls := List.rev !current_decls ;
-
                 if name_in_path then current_path := List.tl !current_path ;
 
                 St.return (c1 @ c2, t)
@@ -2218,86 +2088,58 @@ module Type = struct
                 St.return (return (`Eq (t2, `Int)) :: return (`Ind (t1, t)) :: c1 @ c2, t)
 
             | E.Name x ->
-                begin try St.return ([], Context.find x ctx)
-                with Not_found ->
-                    failwith @@ Printf.sprintf "infer: unbound variable \"%s\" at [%d:%d, %s]"
-                        x inf.pos.row inf.pos.col inf.name
-                end
+                let xs, c, t = match Context.find_opt x ctx with
+                | Some tsc -> tsc
+                | None -> failwith @@ Printf.sprintf "infer: unbound variable \"%s\" at [%d:%d, %s]"
+                    x inf.pos.row inf.pos.col inf.name
+                in
+
+                if IS.is_empty xs
+                then begin
+                    if c <> [] then failwith "BUG: non-empty constraints without bound variables" ;
+
+                    St.return ([], t)
+                end else fun s ->
+                    let xs = IM.of_seq @@ Seq.map (fun x -> x, new_var ()) @@ IS.to_seq xs in
+
+                    let gtol = gvars_to_lvars var_gen !current_level s xs in
+                    let c = List.map (fun c -> return @@ gtol#c IS.empty c) c in
+                    let t = gtol#t IS.empty t in
+                    let s = gtol#finalize () in
+
+                    (c, t), s
 
             | E.Int 0 -> St.return ([], new_tv ())
             | E.Int _ -> St.return ([], `Int)
             | E.String _ -> St.return ([], `String)
             | E.Lambda (xs, b) -> fun s ->
-                (* here we generate variables for parameters on special level `k` *)
-
-                current_level := !current_level + 1 ;
-
                 let xts = List.map (fun x -> x, new_tv ()) xs in
 
                 (* fictive variable on high level to prevent overmonomorphization *)
                 let t = new_tv () in
 
-                (* next we infer_t type of body on lower level (`k + 1`)
-                 * and simplify them on this level
-                 *)
+                (* next we infer_t type of body on lower level and simplify them on this level *)
 
                 current_level := !current_level + 1 ;
 
-                let ctx' = List.fold_left (fun ctx (x, t) -> Context.add x t ctx) ctx xts in
-                let (c, t'), s = infer_t ctx' b s in
+                let f ctx (x, t) = Context.add x (IS.empty, [], t) ctx in
+                let ctx = List.fold_left f ctx xts in
+                let (c, t'), s = infer_t ctx b s in
                 let c = return (`Eq (t, t')) :: c in
 
-                let Simpl.{ s ; r = c ; unification_handlers } =
+                let s, c =
                     let level = !current_level in
-                    let simplify = simplify prev_var_idx (level - 1) level in
-                    simplify#run s @@ simplify#full c
+                    let simplify = simplify var_gen (level - 1) level in
+                    let st = simplify#run s @@ simplify#full c in
+                    let Simpl.{ s ; r ; unification_handlers = _ } = simplify#finalize st in
+                    s, r
                 in
 
-                (* after that we have residual constraints and substitution
-                 *
-                 * we perform deterministic simplification on level `k`
-                 * to eliminate obvious constraints
-                 *
-                 * note that if we do non-deterministic simplification here,
-                 * we will get overspecialized solution
-                 *)
+                (* after that we have residual constraints and substitution *)
 
                 current_level := !current_level - 1 ;
 
-                let bc, s, fc =
-                    let level = !current_level in
-                    let simplify = simplify prev_var_idx level level in
-                    let bc, st = simplify#run ~unification_handlers s @@ simplify#full_deterministic c in
-                    let Simpl.{ s ; r ; unification_handlers } = simplify#finalize st in
-                    let _ = unification_handlers in
-                    bc, s, r
-                in
-
-                (* now we have two kinds of residual constraints:
-                 * "true" residual constraints are free since we unable to solve them on level `k`,
-                 * other returned constraints are bound since we unable to solve them deterministically
-                 *
-                 * to build result type, we need to convert bound variables to ground
-                 *)
-
-                let ts = List.map snd xts in
-
-                let xs, bc, ts, t, s =
-                    let level = !current_level in
-                    let lvars_to_gvars = lvars_to_gvars prev_var_idx level @@ fun l -> l >= level in
-
-                    let ts, s = St.map_m (Fun.flip @@ lvars_to_gvars#t IS.empty) ts s in
-                    let bc, s = St.map_m (fun (c, _) s -> lvars_to_gvars#c IS.empty s c) bc s in
-                    let t, s = lvars_to_gvars#t IS.empty s t in
-                    let xs = lvars_to_gvars#vars () in
-                    xs, bc, ts, t, s
-                in
-
-                current_level := !current_level - 1 ;
-
-                let bc = List.sort_uniq compare_c bc in
-
-                (fc, `Arrow (xs, bc, ts, t)), s
+                (c, `Arrow (List.map snd xts, t)), s
 
             | E.Skip -> St.return ([], new_tv ())
             | E.Array xs ->
@@ -2346,30 +2188,187 @@ module Type = struct
                 let c = List.concat @@ List.rev cs in
                 St.return (return (`Match (t, ps)) :: c, s)
 
-        and infer_decl ctx : E.decl -> (c_aux list) St.t = function
+        and infer_decl ctx : E.decl -> (c_aux list * decl_type list) St.t = function
         | E.Var v, inf ->
-            let t' = Context.find inf.name ctx in
+            let t' =
+                let xs, c, t = Context.find inf.name ctx in
 
-            if inf.public then public_names := Context.add inf.name t' !public_names ;
+                if not (IS.is_empty xs) || c <> [] then
+                    failwith "BUG: temporary type variable of declaration has bound variables" ;
 
-            let old_decls = !current_decls in
+                t
+            in
+
             current_decls := [] ;
 
             let* c, t = infer_t ctx v in
 
-            current_decls := (inf.name, t', !current_decls) :: old_decls ;
+            let inner_decls = !current_decls in
 
             let c' = `Eq (t', t), { path = !current_path ; pos = (snd v).pos ; parents = [] } in
-            St.return @@ c' :: c
+            St.return (c' :: c, inner_decls)
 
         | E.Fun (xs, b), inf -> infer_decl ctx (E.Var (E.Lambda (xs, b), snd b), inf)
 
-        and infer_decls ctx ds : (c_aux list * t Context.t) St.t =
-            let f ctx (_, inf : E.decl) = Context.add inf.name (new_tv ()) ctx in
-            let ctx = List.fold_left f ctx ds in
+        and infer_decls ctx ds : (c_aux list * tsc Context.t) St.t =
+            let module SM = Map.Make(String) in
 
-            let* c = St.map_m (infer_decl ctx) ds in
-            St.return (List.concat c, ctx)
+            (* strong connectivity components in order from less dependent to most dependent *)
+            let comps =
+                let module SS = Set.Make(String) in
+
+                let ds =
+                    let f ds (_, E.{ name ; _ } as d : E.decl) = SM.add name d ds in
+                    List.fold_left f SM.empty ds
+                in
+
+                let ord = Stdlib.ref [] in
+                let deps_inv = Hashtbl.create (SM.cardinal ds) in
+                let visited = Stdlib.ref SS.empty in
+
+                let rec dfs u =
+                    if SS.mem u !visited then () else begin
+                        visited := SS.add u !visited ;
+
+                        let _, E.{ deps ; _ } = SM.find u ds in
+                        List.iter (fun v -> Hashtbl.add deps_inv v u ; dfs v) deps ;
+
+                        ord := u :: !ord
+                    end
+                in
+
+                SM.iter (fun d _ -> dfs d) ds ;
+
+                let ord = !ord in
+                let visited = Stdlib.ref SS.empty in
+
+                let rec dfs comp u =
+                    if SS.mem u !visited then comp else begin
+                        visited := SS.add u !visited ;
+
+                        List.fold_left dfs (SM.find u ds :: comp) @@ Hashtbl.find_all deps_inv u
+                    end
+                in
+
+                let f comps u = match dfs [] u with
+                | [] -> comps
+                | comp -> comp :: comps
+                in
+
+                List.fold_left f [] ord
+            in
+
+            let f ctx comp s : c_aux list * tsc Context.t * Subst.t =
+                current_level := !current_level + 1 ;
+
+                let old_decls = !current_decls in
+
+                let ts = List.map (fun _ -> new_tv ()) comp in
+
+                let ctx' =
+                    let f ctx (_, { name ; _ } : E.decl) t = Context.add name (IS.empty, [], t) ctx in
+                    List.fold_left2 f ctx comp ts
+                in
+
+                let cds, s = St.map_m (infer_decl ctx') comp s in
+                let c = List.concat_map fst cds in
+
+                (* we perform deterministic simplification to eliminate obvious constraints
+                 *
+                 * note that if we do non-deterministic simplification here,
+                 * we will get overspecialized solution
+                 *)
+
+                let bc, s, fc =
+                    let level = !current_level in
+                    let simplify = simplify var_gen level level in
+                    let bc, st = simplify#run s @@ simplify#full_deterministic c in
+                    let Simpl.{ s ; r ; unification_handlers = _ } = simplify#finalize st in
+                    bc, s, r
+                in
+
+                (* now we have two kinds of residual constraints:
+                 * "true" residual constraints are free since we unable to solve them on this level,
+                 * other returned constraints are bound since we unable to solve them deterministically
+                 *
+                 * to build result type, we need to convert bound variables to ground
+                 *)
+
+                let all_vars, all_funs =
+                    let is_fun (`LVar (t, _)) = match Subst.find_type t s with
+                    | Some (`Arrow _) -> true
+                    | _ -> false
+                    in
+
+                    not (List.exists is_fun ts), List.for_all is_fun ts
+                in
+
+                if not all_vars && not all_funs then
+                    failwith "TODO: both variables and function in one connectivity component" ;
+
+                if all_vars then begin
+                    current_decls := old_decls ;
+
+                    let ctx =
+                        let tds = List.combine ts @@ List.map snd cds in
+                        let f ctx (_, { name ; public ; _ } : E.decl) (t, inner_decls) =
+                            let tsc = IS.empty, [], t in
+
+                            if public then public_names := Context.add name tsc !public_names ;
+                            current_decls := (name, tsc, inner_decls) :: !current_decls ;
+
+                            Context.add name tsc ctx
+                        in
+
+                        List.fold_left2 f ctx comp tds
+                    in
+
+                    bc @ fc, ctx, s
+
+                end else begin
+                    let xs, bc, ts, s =
+                        let level = !current_level in
+                        let lvars_to_gvars = lvars_to_gvars var_gen level @@ fun l -> l >= level in
+
+                        let ts, s = St.map_m (Fun.flip @@ lvars_to_gvars#t IS.empty) ts s in
+                        let bc, s = St.map_m (fun (c, _) s -> lvars_to_gvars#c IS.empty s c) bc s in
+                        let xs = lvars_to_gvars#vars () in
+
+                        let bc = List.sort_uniq compare_c bc in
+                        xs, bc, ts, s
+                    in
+
+                    current_decls := old_decls ;
+
+                    let ctx =
+                        let tds = List.combine ts @@ List.map snd cds in
+                        let f ctx (_, { name ; public ; _ } : E.decl) (t, inner_decls) =
+                            let tsc = xs, bc, t in
+
+                            if public then public_names := Context.add name tsc !public_names ;
+                            current_decls := (name, tsc, inner_decls) :: !current_decls ;
+
+                            Context.add name tsc ctx
+                        in
+
+                        List.fold_left2 f ctx comp tds
+                    in
+
+                    fc, ctx, s
+                end
+            in
+
+            let f ((c, ctx), s) comp = let c', ctx, s = f ctx comp s in (c' @ c, ctx), s in
+
+            fun s ->
+                let old_level = !current_level in
+
+                let res = List.fold_left f (([], ctx), s) comps in
+
+                current_decls := List.rev !current_decls ;
+
+                current_level := old_level ;
+                res
         in
 
         object
@@ -2377,10 +2376,9 @@ module Type = struct
             method pattern = infer_p
             method term = infer_t
 
-            method decl = infer_decl
             method decls = infer_decls
 
-            method simplify = simplify prev_var_idx 0
+            method simplify = simplify var_gen 0
 
             method public_names () = !public_names
             method all_decls () = !current_decls
@@ -2402,17 +2400,15 @@ module Type = struct
         | `String -> `String
         | `Array t -> `Array (mono_t bvs t)
         | `Sexp xs -> `Sexp (mono_sexp bvs xs)
-        | `Arrow (xs, c, ts, t) ->
-            let bvs = IS.union bvs xs in
-            `Arrow (xs, List.map (mono_c bvs) c, List.map (mono_t bvs) ts, mono_t bvs t)
-
+        | `Arrow (ts, t) -> `Arrow (List.map (mono_t bvs) ts, mono_t bvs t)
         | `Vararg (ts, t) -> `Vararg (List.map (mono_t bvs) ts, mono_t bvs t)
         | `Mu (x, t) -> `Mu (x, mono_t (IS.add x bvs) t)
 
         and mono_sexp bvs ((xs, _) : sexp) : sexp =
             SexpConstructors.map (List.map @@ mono_t bvs) xs, None
+        in
 
-        and mono_p bvs : p -> p = function
+        let rec mono_p bvs : p -> p = function
         | `Wildcard -> `Wildcard
         | `Typed (t, p) -> `Typed (mono_t bvs t, mono_p bvs p)
         | `Array ps -> `Array (List.map (mono_p bvs) ps)
@@ -2423,8 +2419,9 @@ module Type = struct
         | `ArrayTag -> `ArrayTag
         | `SexpTag -> `SexpTag
         | `FunTag -> `FunTag
+        in
 
-        and mono_c bvs : c -> c = function
+        let mono_c bvs : c -> c = function
         | `Eq (t1, t2) -> `Eq (mono_t bvs t1, mono_t bvs t2)
         | `Ind (t1, t2) -> `Ind (mono_t bvs t1, mono_t bvs t2)
         | `IndI (i, t1, t2) -> `IndI (i, mono_t bvs t1, mono_t bvs t2)
@@ -2470,15 +2467,8 @@ module Interface = struct
         | `String -> append "String"
         | `Array t -> append "[" ; append_t t ; append "]"
         | `Sexp xs -> append_sexp xs
-        | `Arrow (xs, c, ts, t) ->
-            append "forall" ;
-
-            append_list ~prefix:" " append_var @@ Type.IS.elements xs ;
-            append "." ;
-
-            append_list ~prefix:" " append_c c ;
-
-            append " => (" ;
+        | `Arrow (ts, t) ->
+            append "(" ;
             append_list append_t ts ;
             append ") -> " ;
             append_t t
@@ -2500,8 +2490,9 @@ module Interface = struct
 
             let f ((x, _), ts) = append x ; append_list ~prefix:" (" ~suffix:")" append_t ts in
             append_list ~sep:" + " f @@ Type.SexpConstructors.bindings xs
+        in
 
-        and append_p = function
+        let rec append_p = function
         | `Wildcard -> append "_"
         | `Typed (t, p) -> append_t t ; append " @ " ; append_p p
         | `Array ps -> append "[" ; append_list append_p ps ; append "]"
@@ -2512,8 +2503,9 @@ module Interface = struct
         | `ArrayTag -> append "#array"
         | `SexpTag -> append "#sexp"
         | `FunTag -> append "#fun"
+        in
 
-        and append_c = function
+        let append_c = function
         | `Eq _ -> failwith "BUG: Eq constraint in typed interface"
         | `Ind (t1, t2) -> append "Ind (" ; append_t t1 ; append ", " ; append_t t2 ; append ")"
         | `IndI (i, t1, t2) ->
@@ -2554,7 +2546,17 @@ module Interface = struct
             append ")"
         in
 
-        Type.Context.iter (fun x t -> append x ; append " : " ; append_t t ; append " ;\n") ctx ;
+        let append_tsc (xs, c, t : Type.tsc) =
+            if Type.IS.is_empty xs && c <> [] then
+                failwith "BUG: non-empty constraints without bound variables" ;
+
+            append_list ~prefix:"forall " ~suffix:". " append_var @@ Type.IS.elements xs ;
+            append_list ~suffix:" => " append_c c ;
+            append_t t
+        in
+
+        let f x tsc = append x ; append " : " ; append_tsc tsc ; append " ;\n" in
+        Type.Context.iter f ctx ;
         Buffer.contents buf
 
     (* Read an interface file *)
@@ -2568,7 +2570,18 @@ module Interface = struct
         in
 
         let ostap (
-            decl   : i:IDENT ":" t:typ ";" { (i, t) } ;
+            decl   : i:IDENT ":" t:tsc ";" { i, t } ;
+            tsc    : <xs, c> :tscXsC t:typ { xs, c, t } ;
+            tscXsC : xsc:(-"forall" (!(Util.list)[ostap (DECIMAL)]) -"."
+                     ((!(Util.list)[cnstr]) -"=>")?)?
+            {
+                let fxs xs = Type.IS.of_seq @@ Seq.map on_var @@ List.to_seq xs in
+
+                match xsc with
+                | None -> Type.IS.empty, []
+                | Some (xs, None) -> fxs xs, []
+                | Some (xs, Some c) -> fxs xs, c
+            } ;
             typ    : tVar | tInt | tString | tArray | tSexp | tArrow | tVararg | tMu ;
             tVar   : v:DECIMAL { `GVar (on_var v) } ;
             tInt   : "Int" { `Int } ;
@@ -2582,11 +2595,7 @@ module Interface = struct
             tSexpC : x:IDENT ts:(-"(" (!(Util.list)[typ]) -")")? {
                 x, match ts with None -> [] | Some ts -> ts
             } ;
-            tArrow : "forall" xs:(!(Util.list0)[ostap (DECIMAL)])
-                     "." c:(!(Util.list0)[cnstr])
-                     "=>" "(" ts:(!(Util.list0)[typ]) ")"
-                     "->" t:typ
-            { `Arrow (Type.IS.of_seq @@ Seq.map on_var @@ List.to_seq xs, c, ts, t) } ;
+            tArrow : "(" ts:(!(Util.list0)[typ]) ")" "->" t:typ { `Arrow (ts, t) } ;
             tVararg: "(" ts:(!(Util.list)[typ] -"," | (!(Combinators.empty)) { [] }) -"..." ")"
                      "->" t:typ { `Vararg (ts, t) } ;
             tMu    : "mu" x:DECIMAL "." t:typ { `Mu (on_var x, t) } ;
@@ -2629,7 +2638,7 @@ module Interface = struct
             end
         with Sys_error _ -> None
 
-    let find max_var paths import : string * (string * Type.t) list =
+    let find max_var paths import : string * (string * Type.tsc) list =
         let import' = import ^ ".ti" in
 
         let rec inner = function

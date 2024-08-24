@@ -218,7 +218,7 @@ let[@ocaml.warning "-32"] main =
                 let remu = T.Type.refresh_mu 0 in
 
                 let s = Stdlib.ref T.Type.Subst.empty in
-                let f t = let t, s' = remu#t T.Type.IS.empty !s t in s := s' ; t in
+                let f t = let t, s' = remu#tsc T.Type.IS.empty !s t in s := s' ; t in
                 let ctx = T.Type.Context.map f ctx in
                 ctx, !s
             in
@@ -227,13 +227,13 @@ let[@ocaml.warning "-32"] main =
             T.Type.Subst.debug_print s ;
 
             print_endline "Context:" ;
-            T.Type.Context.iter (fun x t -> Printf.printf "%s : %s\n" x (T.Type.show_t t)) ctx ;
+            T.Type.Context.iter (fun x t -> Printf.printf "%s : %s\n" x (T.Type.show_tsc t)) ctx ;
 
             Printf.printf "Max variable: %d\n" !max_var ;
 
             let print_decls decls =
-                let rec f indent (x, t, inner) =
-                    Printf.printf "%s- %s : %s\n" indent x @@ T.Type.show_t t ;
+                let rec f indent (x, tsc, inner) =
+                    Printf.printf "%s- %s : %s\n" indent x @@ T.Type.show_tsc tsc ;
                     List.iter (f @@ indent ^ "  ") inner
                 in
 
@@ -241,7 +241,7 @@ let[@ocaml.warning "-32"] main =
             in
 
             let print_pub_decls decls =
-                let f x t = Printf.printf "- %s : %s\n" x (T.Type.show_t t) in
+                let f x tsc = Printf.printf "- %s : %s\n" x (T.Type.show_tsc tsc) in
                 T.Type.Context.iter f decls
             in
 
@@ -285,9 +285,9 @@ let[@ocaml.warning "-32"] main =
                 T.Type.Subst.debug_print s ;
 
                 let finish_types =
-                    let monomorphize = (T.Type.monomorphize `Int)#t T.Type.IS.empty in
-                    let apply_subst = (T.Type.apply_subst s)#t in
-                    fun t -> monomorphize @@ apply_subst t
+                    (* let monomorphize = (T.Type.monomorphize `Int)#tsc T.Type.IS.empty in *)
+                    let apply_subst = (T.Type.apply_subst s)#tsc in
+                    fun t -> (* monomorphize @@ *) apply_subst t
                 in
 
                 let decls =
