@@ -37,7 +37,9 @@ let make_goal t = ocanren {
 }
 *)
 
+(*
 let make_goal t = ocanren { set_occurs_hook_lama_t t & t == TArray t }
 
 let res () = Stream.take ~n:1 @@
     run q make_goal (fun x -> x#reify reify_lama_t)
+*)
