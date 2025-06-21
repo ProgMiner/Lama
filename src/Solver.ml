@@ -425,6 +425,7 @@ let rec eq_t t t' =
         }
     }
 
+(*
 and eq_sexp_hlp xs xs' =
     let hlp x ts xs' = !sexp_x_hlp_ref x xs' ts in
 
@@ -450,6 +451,17 @@ and eq_sexp_hlp xs xs' =
     *)
 
     ocanren { hlp_xs xs xs' & hlp_xs xs' xs }
+*)
+
+and eq_sexp_hlp xs xs' =
+    let rec hlp_xs xs ys = ocanren
+        { xs == [] & ys == []
+        | fresh x, ts1, xs', y, ts2, ys' in xs == (x, ts1) :: xs' & ys == (y, ts2) :: ys'
+            & x == y & eq_t_list ts1 ts2 & hlp_xs xs' ys'
+        }
+    in
+
+    ocanren { hlp_xs xs xs' }
 
 and eq_t_list ts ts' = eq_list eq_t ts ts'
 
