@@ -243,7 +243,7 @@ let[@ocaml.warning "-32"] main =
             print_endline @@ GT.show GT.list T.Type.show_c c ;
             print_endline @@ T.Type.show_t t ;
 
-            let subst = S.solve c in
+            let subst = S.solve ~name:cmd#get_infile c in
 
             print_endline @@ "Substitution: { " ^ S.Subst.fold (fun v t acc ->
                 let t = T.Type.show_t t in

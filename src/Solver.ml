@@ -1095,7 +1095,7 @@ let make_inject () =
         method c = inject_c
     end
 
-let solve (c : TT.c list) : TT.t Subst.t =
+let solve ~name (c : TT.c list) : TT.t Subst.t =
     let inject = make_inject () in
 
     (*
@@ -1138,7 +1138,7 @@ let solve (c : TT.c list) : TT.t Subst.t =
         ocanren { ans == free_vars & [] //- c }
     ) in
 
-    let res = run q make_goal (fun x -> x#reify @@ List.prj_exn reify_lama_t) in
+    let res = run q make_goal (fun x -> x#reify @@ List.prj_exn reify_lama_t, Trace.extract_last ()) in
 
     (*
     (* too slow *)
@@ -1183,15 +1183,18 @@ let solve (c : TT.c list) : TT.t Subst.t =
     *)
 
     let ans = Stream.take ~n:1 @@ Stream.map Stdlib.Option.get
-        @@ Stream.filter Stdlib.Option.is_some @@ Stream.map (fun ans ->
-            try Some (OrigList.map logic_lama_t_to_ground ans)
+        @@ Stream.filter Stdlib.Option.is_some @@ Stream.map (fun (ans, tr) ->
+            try Some (OrigList.map logic_lama_t_to_ground ans, tr)
             with _ -> Printexc.print_backtrace Stdlib.stdout ; None
         ) res
     in
 
     let ans = match ans with
     | [] -> failwith "no one solution found"
-    | [ans] -> ans
+    | [ans, tr] ->
+        let trace_name = Printf.sprintf "./traces/%s.trace" name in
+        Trace.marshal_to_file trace_name tr ;
+        ans
     | _ -> failwith "not reachable"
     in
 
